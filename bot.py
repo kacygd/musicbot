@@ -5,6 +5,7 @@ import asyncio
 import os
 from dotenv import load_dotenv
 from collections import deque
+from aiohttp import web
 
 # Load environment variables
 load_dotenv()
@@ -24,7 +25,7 @@ ytdl_format_options = {
     'format': 'bestaudio/best',
     'restrictfilenames': True,
     'noplaylist': False,  # Enable playlist support
-    'nocheckcertificate': True,
+    'nocheckcertificate': True,  # Bypass SSL verification as a fallback
     'ignoreerrors': False,
     'logtostderr': False,
     'quiet': True,
@@ -148,5 +149,22 @@ async def help_command(ctx):
         embed.add_field(name=f"{PREFIX}{command.name}", value=command.help, inline=False)
     await ctx.send(embed=embed)
 
+# Web server for UptimeRobot
+async def handle_request(request):
+    return web.Response(text="Bot is alive!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_request)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("Web server started on port 8080")
+
+# Start both bot and web server
+async def main():
+    await asyncio.gather(bot.start(TOKEN), start_web_server())
+
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    asyncio.run(main())
