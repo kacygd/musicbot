@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import yt_dlp
+import pytube
 import asyncio
 import os
 from dotenv import load_dotenv
@@ -20,26 +20,6 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 # Remove default help command
 bot.remove_command('help')
 
-# YTDL options for audio streaming
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'restrictfilenames': True,
-    'noplaylist': False,  # Enable playlist support
-    'nocheckcertificate': True,  # Bypass SSL verification as a fallback
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'auto',
-    'source_address': '0.0.0.0'
-}
-
-ffmpeg_options = {
-    'options': '-vn'
-}
-
-ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-
 # Queue to store songs
 song_queue = deque()
 
@@ -47,17 +27,20 @@ class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
         self.data = data
-        self.title = data.get('title')
-        self.url = data.get('url')
+        self.title = data.title
+        self.url = data.watch_url
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-        
-        if 'entries' in data:
-            return [cls(discord.FFmpegPCMAudio(entry['url'], **ffmpeg_options), data=entry) for entry in data['entries']]
-        return cls(discord.FFmpegPCMAudio(data['url'], **ffmpeg_options), data=data)
+        try:
+            youtube = pytube.YouTube(url)
+            stream = youtube.streams.filter(only_audio=True).first()
+            if not stream:
+                raise Exception("No audio stream available")
+            return cls(discord.FFmpegPCMAudio(stream.url), data=youtube)
+        except Exception as e:
+            raise Exception(f"Failed to process video: {str(e)}")
 
 def play_next(ctx):
     if song_queue:
@@ -71,10 +54,10 @@ def play_next(ctx):
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
 
-@bot.command(name='play', help='Plays a song or playlist from YouTube')
+@bot.command(name='play', help='Plays a song from YouTube')
 async def play(ctx, *, url):
     if not ctx.message.author.voice:
-        await ctx.send("You need to be in a voice channel to play music!")
+        await ctx.send("You cần vào voice channel để phát nhạc!")
         return
 
     channel = ctx.message.author.voice.channel
@@ -83,73 +66,67 @@ async def play(ctx, *, url):
 
     async with ctx.typing():
         try:
-            players = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
-            if isinstance(players, list):  # Playlist
-                for player in players:
-                    song_queue.append(player)
-                await ctx.send(f'Added {len(players)} songs from playlist to the queue.')
-            else:  # Single song
-                song_queue.append(players)
-                await ctx.send(f'Added {players.title} to the queue.')
-
+            player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+            song_queue.append(player)
+            await ctx.send(f'Added {player.title} to the queue.')
             if not ctx.voice_client.is_playing():
                 play_next(ctx)
         except Exception as e:
             await ctx.send(f'Error: {str(e)}')
 
-@bot.command(name='volume', help='Sets the volume (0-100)')
+@bot.command(name='volume', help='Đặt volume (0-100)')
 async def volume(ctx, volume: int):
     if not ctx.voice_client:
-        await ctx.send("I'm not in a voice channel!")
+        await ctx.send("Bot không ở trong voice channel!")
         return
     if not 0 <= volume <= 100:
-        await ctx.send("Volume must be between 0 and 100!")
+        await ctx.send("Volume phải từ 0 đến 100!")
         return
     ctx.voice_client.source.volume = volume / 100
-    await ctx.send(f"Set volume to {volume}%")
+    await ctx.send(f"Volume đặt thành {volume}%")
 
-@bot.command(name='pause', help='Pauses the current song')
+@bot.command(name='pause', help='Tạm dừng nhạc')
 async def pause(ctx):
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.pause()
-        await ctx.send("Paused the music.")
+        await ctx.send("Đã tạm dừng nhạc.")
     else:
-        await ctx.send("No music is playing!")
+        await ctx.send("Không có nhạc đang phát!")
 
-@bot.command(name='resume', help='Resumes the paused song')
+@bot.command(name='resume', help='Tiếp tục nhạc')
 async def resume(ctx):
     if ctx.voice_client and ctx.voice_client.is_paused():
         ctx.voice_client.resume()
-        await ctx.send("Resumed the music.")
+        await ctx.send("Đã tiếp tục nhạc.")
     else:
-        await ctx.send("Music is not paused!")
+        await ctx.send("Nhạc không bị tạm dừng!")
 
-@bot.command(name='stop', help='Stops the music and clears the queue')
+@bot.command(name='stop', help='Dừng nhạc và xóa queue')
 async def stop(ctx):
     if ctx.voice_client:
         ctx.voice_client.stop()
         song_queue.clear()
-        await ctx.send("Stopped the music and cleared the queue.")
+        await ctx.send("Đã dừng nhạc và xóa queue.")
     else:
-        await ctx.send("No music is playing!")
+        await ctx.send("Không có nhạc đang phát!")
 
-@bot.command(name='leave', help='Leaves the voice channel')
+@bot.command(name='leave', help='Rời voice channel')
 async def leave(ctx):
     if ctx.voice_client:
         song_queue.clear()
         await ctx.voice_client.disconnect()
-        await ctx.send("Disconnected from the voice channel.")
+        await ctx.send("Đã rời voice channel.")
     else:
-        await ctx.send("I'm not in a voice channel!")
+        await ctx.send("Bot không ở trong voice channel!")
 
-@bot.command(name='help', help='Shows this help message')
+@bot.command(name='help', help='Hiển thị danh sách lệnh')
 async def help_command(ctx):
-    embed = discord.Embed(title="Music Bot Commands", color=discord.Color.blue())
+    embed = discord.Embed(title="Lệnh Music Bot", color=discord.Color.blue())
     for command in bot.commands:
         embed.add_field(name=f"{PREFIX}{command.name}", value=command.help, inline=False)
     await ctx.send(embed=embed)
 
-# Web server for UptimeRobot
+# Web server cho UptimeRobot
 async def handle_request(request):
     return web.Response(text="Bot is alive!")
 
@@ -160,9 +137,9 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
-    print("Web server started on port 8080")
+    print("Web server chạy trên port 8080")
 
-# Start both bot and web server
+# Chạy bot và web server cùng lúc
 async def main():
     await asyncio.gather(bot.start(TOKEN), start_web_server())
 
