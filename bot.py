@@ -2,13 +2,10 @@ import discord
 from discord.ext import commands
 import yt_dlp
 import asyncio
-import os
-from dotenv import load_dotenv
 from collections import deque
 
-# Load environment variables
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
+# Set bot token directly
+TOKEN = 'OTQxNTYyMjI0OTI3OTY1MjE0.GuRfSN.JosK4VqA1dNKFTQbSbVbcylw02mM281HMJYdTI'  # Replace with your actual token
 PREFIX = '!'
 
 # Set up bot with intents
