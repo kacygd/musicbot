@@ -5,7 +5,7 @@ import asyncio
 from collections import deque
 
 # Set bot token directly
-TOKEN = 'OTQxNTYyMjI0OTI3OTY1MjE0.GuRfSN.JosK4VqA1dNKFTQbSbVbcylw02mM281HMJYdTI'  # Replace with your actual token
+TOKEN = 'OTQxNTYyMjI0OTI3OTY1MjE0.GvAHoA.IoTrkbUG6YlUz8NGs9m3OWgU_SLdIGKqFtRD_8'  # Replace with your actual token
 PREFIX = '!'
 
 # Set up bot with intents
