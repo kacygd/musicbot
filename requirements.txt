@@ -1,5 +1,5 @@
 discord.py
-pytube
+wavelink
 PyNaCl
 python-dotenv
 aiohttp
