@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import pytube
+import wavelink
 import asyncio
 import os
 from dotenv import load_dotenv
@@ -23,54 +23,56 @@ bot.remove_command('help')
 # Queue to store songs
 song_queue = deque()
 
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
-        self.data = data
-        self.title = data.title
-        self.url = data.watch_url
-
-    @classmethod
-    async def from_url(cls, url, *, loop=None, stream=True):
-        loop = loop or asyncio.get_event_loop()
-        try:
-            youtube = pytube.YouTube(url)
-            stream = youtube.streams.filter(only_audio=True).first()
-            if not stream:
-                raise Exception("No audio stream available")
-            return cls(discord.FFmpegPCMAudio(stream.url), data=youtube)
-        except Exception as e:
-            raise Exception(f"Failed to process video: {str(e)}")
-
-def play_next(ctx):
-    if song_queue:
-        player = song_queue.popleft()
-        ctx.voice_client.play(player, after=lambda e: play_next(ctx) if not e else print(f'Player error: {e}'))
-        asyncio.run_coroutine_threadsafe(ctx.send(f'Now playing: {player.title}'), bot.loop)
-    else:
-        asyncio.run_coroutine_threadsafe(ctx.send("Queue is empty!"), bot.loop)
-
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
+    # Kết nối với node Lavalink công khai
+    await wavelink.Pool.connect(
+        client=bot,
+        nodes=[
+            wavelink.Node(
+                uri='wss://lava-v3.ajieblogs.eu.org:443',
+                password='https://dsc.gg/ajidevserver',
+                secure=True
+            )
+        ]
+    )
 
-@bot.command(name='play', help='Plays a song from YouTube')
-async def play(ctx, *, url):
+@bot.event
+async def on_wavelink_node_ready(node: wavelink.Node):
+    print(f"Lavalink node {node.identifier} ready!")
+
+async def play_next(ctx):
+    if song_queue:
+        track = song_queue.popleft()
+        player = ctx.voice_client
+        await player.play(track)
+        await ctx.send(f'Now playing: {track.title}')
+    else:
+        await ctx.send("Queue is empty!")
+
+@bot.command(name='play', help='Phát nhạc từ YouTube')
+async def play(ctx, *, query):
     if not ctx.message.author.voice:
-        await ctx.send("You cần vào voice channel để phát nhạc!")
+        await ctx.send("Bạn cần vào voice channel để phát nhạc!")
         return
 
     channel = ctx.message.author.voice.channel
     if not ctx.voice_client:
-        await channel.connect()
+        player = await channel.connect(cls=wavelink.Player)
+    else:
+        player = ctx.voice_client
 
     async with ctx.typing():
         try:
-            player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
-            song_queue.append(player)
-            await ctx.send(f'Added {player.title} to the queue.')
-            if not ctx.voice_client.is_playing():
-                play_next(ctx)
+            tracks = await wavelink.YouTubeTrack.search(query, return_first=True)
+            if not tracks:
+                await ctx.send("Không tìm thấy bài hát!")
+                return
+            song_queue.append(tracks)
+            await ctx.send(f'Added {tracks.title} to the queue.')
+            if not player.playing:
+                await play_next(ctx)
         except Exception as e:
             await ctx.send(f'Error: {str(e)}')
 
@@ -82,21 +84,22 @@ async def volume(ctx, volume: int):
     if not 0 <= volume <= 100:
         await ctx.send("Volume phải từ 0 đến 100!")
         return
-    ctx.voice_client.source.volume = volume / 100
+    player = ctx.voice_client
+    await player.set_volume(volume)
     await ctx.send(f"Volume đặt thành {volume}%")
 
 @bot.command(name='pause', help='Tạm dừng nhạc')
 async def pause(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
+    if ctx.voice_client and ctx.voice_client.playing:
+        await ctx.voice_client.pause()
         await ctx.send("Đã tạm dừng nhạc.")
     else:
         await ctx.send("Không có nhạc đang phát!")
 
 @bot.command(name='resume', help='Tiếp tục nhạc')
 async def resume(ctx):
-    if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
+    if ctx.voice_client and ctx.voice_client.paused:
+        await ctx.voice_client.resume()
         await ctx.send("Đã tiếp tục nhạc.")
     else:
         await ctx.send("Nhạc không bị tạm dừng!")
@@ -104,7 +107,7 @@ async def resume(ctx):
 @bot.command(name='stop', help='Dừng nhạc và xóa queue')
 async def stop(ctx):
     if ctx.voice_client:
-        ctx.voice_client.stop()
+        await ctx.voice_client.stop()
         song_queue.clear()
         await ctx.send("Đã dừng nhạc và xóa queue.")
     else:
@@ -139,7 +142,7 @@ async def start_web_server():
     await site.start()
     print("Web server chạy trên port 8080")
 
-# Chạy bot và web server cùng lúc
+# Chạy bot và web server
 async def main():
     await asyncio.gather(bot.start(TOKEN), start_web_server())
 
