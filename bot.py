@@ -5,6 +5,9 @@ import asyncio
 import os
 from dotenv import load_dotenv
 from collections import deque
+import http.server
+import socketserver
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -37,6 +40,42 @@ loop_count = {}
 loop_active = {}
 loop_track = {} 
 is_skipping = False  # Flag to prevent multiple skip triggers
+
+# HTML content for the server
+HTML_CONTENT = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Music Bot Status</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        h1 { color: #2c3e50; }
+        p { font-size: 18px; }
+    </style>
+</head>
+<body>
+    <h1>Discord Music Bot Status</h1>
+    <p>Bot is running! Check Discord for music controls.</p>
+</body>
+</html>
+"""
+
+# HTTP server handler
+class SimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(HTML_CONTENT.encode('utf-8'))
+
+# Function to start HTTP server
+def start_http_server():
+    PORT = 8000
+    with socketserver.TCPServer(("", PORT), SimpleHTTPRequestHandler) as httpd:
+        print(f"HTTP server running on port {PORT}")
+        httpd.serve_forever()
 
 # Hàm chuyển đổi thời lượng từ mili-giây sang phút:giây
 def format_duration(length):
@@ -181,6 +220,9 @@ async def on_ready():
         await sync_commands()  # Sync slash commands on startup
     except Exception as e:
         print(f"Failed to connect to Lavalink: {e}")
+
+    # Start HTTP server in a separate thread
+    threading.Thread(target=start_http_server, daemon=True).start()
 
 @bot.event
 async def on_wavelink_node_ready(payload: wavelink.NodeReadyEventPayload):
