@@ -40,6 +40,7 @@ loop_count = {}
 loop_active = {}
 loop_track = {} 
 is_skipping = False  # Flag to prevent multiple skip triggers
+auto_disconnect_task = {}  # Dictionary to track auto-disconnect tasks per guild
 
 # HTML content for the server
 HTML_CONTENT = """
@@ -82,6 +83,50 @@ def format_duration(length):
     seconds = length // 1000  # Chuyển mili-giây sang giây
     minutes, seconds = divmod(seconds, 60)
     return f"{minutes}:{seconds:02d}"
+
+# Hàm cập nhật trạng thái bot
+async def update_bot_status(guild_id=None, player=None):
+    if player and player.playing and player.current:
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=player.current.title))
+    elif song_queue:
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Hàng đợi: {len(song_queue)} bài"))
+    else:
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Đang chờ nhạc"))
+    print(f"Updated bot status for guild {guild_id}")
+
+# Hàm kiểm tra và tự động rời kênh thoại
+async def auto_disconnect(guild_id, player):
+    global song_queue, current_playing_message
+    await asyncio.sleep(180)  # Chờ 3 phút
+    if not player or not player.channel:
+        print(f"Player or channel not found for guild {guild_id}")
+        return
+    # Kiểm tra nếu không còn người dùng trong kênh (trừ bot)
+    if len([member for member in player.channel.members if not member.bot]) == 0:
+        print(f"No users in voice channel for guild {guild_id}, disconnecting...")
+        song_queue.clear()
+        current_playing_message = None
+        await player.disconnect()
+        await update_bot_status(guild_id)
+        embed = discord.Embed(
+            title="Rời", description="Đã rời kênh thoại do không còn người dùng sau 3 phút.", color=discord.Color.blue()
+        )
+        if player.text_channel:
+            await player.text_channel.send(embed=embed, delete_after=5)
+    # Kiểm tra nếu không còn bài hát và không phát nhạc
+    elif not player.playing and not song_queue:
+        print(f"No tracks playing or in queue for guild {guild_id}, disconnecting...")
+        song_queue.clear()
+        current_playing_message = None
+        await player.disconnect()
+        await update_bot_status(guild_id)
+        embed = discord.Embed(
+            title="Rời", description="Đã rời kênh thoại do không còn bài hát sau 3 phút.", color=discord.Color.blue()
+        )
+        if player.text_channel:
+            await player.text_channel.send(embed=embed, delete_after=5)
+    if guild_id in auto_disconnect_task:
+        del auto_disconnect_task[guild_id]
 
 # Class for music control buttons
 class MusicButtons(discord.ui.View):
@@ -147,11 +192,16 @@ class MusicButtons(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, emoji="🚪")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global current_playing_message, song_queue
+        global current_playing_message, song_queue, auto_disconnect_task
         if interaction.guild.voice_client:
+            guild_id = interaction.guild.id
+            if guild_id in auto_disconnect_task:
+                auto_disconnect_task[guild_id].cancel()
+                del auto_disconnect_task[guild_id]
             song_queue.clear()
             await interaction.guild.voice_client.disconnect()
             current_playing_message = None
+            await update_bot_status(guild_id)
             await interaction.response.send_message(embed=discord.Embed(
                 title="Rời", description="Đã rời voice channel.", color=discord.Color.blue()), delete_after=5)
         else:
@@ -206,6 +256,7 @@ class QueueView(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
+    await update_bot_status()
     try:
         await wavelink.Pool.connect(
             client=bot,
@@ -230,16 +281,14 @@ async def on_wavelink_node_ready(payload: wavelink.NodeReadyEventPayload):
 
 @bot.event
 async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
-    global current_playing_message, is_skipping
+    global current_playing_message, is_skipping, auto_disconnect_task
     print(f"Track ended: {payload.reason}")
     player = payload.player
     channel = getattr(player, 'text_channel', None)
+    guild_id = player.guild.id
     current_playing_message = None
     player_id = id(player)
     current_track = loop_track.get(player_id)
-
-    # Debug log
-    print(f"Player ID: {player_id}, Loop Count: {loop_count.get(player_id)}, Loop Active: {loop_active.get(player_id)}, Loop Track: {current_track}, Is Skipping: {is_skipping}")
 
     # Kiểm tra loop cho bài hát hiện tại
     if current_track and player_id in loop_count and loop_count[player_id] > 0 and loop_active.get(player_id, False):
@@ -247,6 +296,7 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
         try:
             await player.play(current_track)
             print(f"Replaying track: {current_track.title} (Loop count left: {loop_count[player_id]})")
+            await update_bot_status(guild_id, player)
         except Exception as e:
             print(f"Error replaying track: {e}")
         return
@@ -262,12 +312,32 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
     if channel and song_queue and not loop_active.get(player_id, False) and not is_skipping:
         await play_next(channel)
     elif channel and not song_queue:
-        embed = discord.Embed(title="Hàng đợi rỗng", description="Queue is empty!", color=discord.Color.blue())
-        await channel.send(embed=embed)
-        current_playing_message = None
+        # Không gửi embed "Hàng đợi rỗng", chỉ khởi động auto-disconnect
+        if guild_id not in auto_disconnect_task:
+            auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
+        await update_bot_status(guild_id)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    global auto_disconnect_task
+    if member.bot or not before.channel:
+        return
+    guild_id = member.guild.id
+    player = member.guild.voice_client
+    if not player:
+        return
+    # Kiểm tra nếu không còn người dùng trong kênh
+    if len([m for m in before.channel.members if not m.bot]) == 0:
+        if guild_id not in auto_disconnect_task:
+            auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
+    # Hủy task nếu có người quay lại kênh
+    elif guild_id in auto_disconnect_task:
+        auto_disconnect_task[guild_id].cancel()
+        del auto_disconnect_task[guild_id]
+        print(f"Cancelled auto-disconnect for guild {guild_id}, users rejoined")
 
 async def play_next(channel):
-    global current_playing_message, saved_volume, is_skipping
+    global current_playing_message, saved_volume, is_skipping, auto_disconnect_task
     print(f"Attempting play_next, Is Skipping: {is_skipping}")
     if not channel.guild.voice_client:
         print("No voice client found in play_next")
@@ -292,10 +362,16 @@ async def play_next(channel):
             message = await channel.send(embed=embed, view=MusicButtons())
             current_playing_message = message.id
             print(f"Playing track: {track.title}")
+            await update_bot_status(channel.guild.id, player)
+            # Hủy task auto-disconnect nếu có
+            if channel.guild.id in auto_disconnect_task:
+                auto_disconnect_task[channel.guild.id].cancel()
+                del auto_disconnect_task[channel.guild.id]
         else:
-            embed = discord.Embed(title="Hàng đợi rỗng", description="Queue is empty!", color=discord.Color.blue())
-            await channel.send(embed=embed)
-            current_playing_message = None
+            # Không gửi embed "Hàng đợi rỗng", chỉ khởi động auto-disconnect
+            if channel.guild.id not in auto_disconnect_task:
+                auto_disconnect_task[channel.guild.id] = asyncio.create_task(auto_disconnect(channel.guild.id, channel.guild.voice_client))
+            await update_bot_status(channel.guild.id)
     except discord.HTTPException as e:
         if e.status == 429:
             print(f"Rate limited (429). Waiting 5 seconds before retrying...")
@@ -314,7 +390,7 @@ async def play_next(channel):
 
 @bot.tree.command(name="play", description="Phát nhạc hoặc playlist từ YouTube")
 async def play_slash(interaction: discord.Interaction, query: str):
-    global current_playing_message, saved_volume
+    global current_playing_message, saved_volume, auto_disconnect_task
     print(f"Received /play command with query: {query}")
     
     await interaction.response.defer(thinking=True)
@@ -336,10 +412,20 @@ async def play_slash(interaction: discord.Interaction, query: str):
             await player.set_volume(saved_volume)
             player.text_channel = interaction.channel
             print(f"Connected to voice channel: {channel.name}")
+        except discord.HTTPException as e:
+            if e.status == 429:
+                print("Rate limited (429). Retrying after 5 seconds...")
+                await asyncio.sleep(5)
+                player = await channel.connect(cls=wavelink.Player)
+                await player.set_volume(saved_volume)
+                player.text_channel = interaction.channel
+            else:
+                embed = discord.Embed(title="Lỗi", description=f"Không thể kết nối kênh thoại: {e}", color=discord.Color.red())
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                print(f"Failed to join voice channel: {e}")
+                return
         except Exception as e:
-            embed = discord.Embed(
-                title="Lỗi", description=f"Failed to join voice channel: {e}", color=discord.Color.red()
-            )
+            embed = discord.Embed(title="Lỗi", description=f"Không thể kết nối kênh thoại: {e}", color=discord.Color.red())
             await interaction.followup.send(embed=embed, ephemeral=True)
             print(f"Failed to join voice channel: {e}")
             return
@@ -375,9 +461,15 @@ async def play_slash(interaction: discord.Interaction, query: str):
                     message = await interaction.followup.send(embed=embed, view=MusicButtons())
                     current_playing_message = message.id
                     print(f"Playing track: {track.title}")
+                    await update_bot_status(interaction.guild.id, player)
+                    # Hủy task auto-disconnect nếu có
+                    if interaction.guild.id in auto_disconnect_task:
+                        auto_disconnect_task[interaction.guild.id].cancel()
+                        del auto_disconnect_task[interaction.guild.id]
                 else:
                     await interaction.followup.send(embed=embed)
                     print(f"Added {len(tracks.tracks)} tracks from playlist to queue")
+                    await update_bot_status(interaction.guild.id)
             else:
                 track = tracks[0]
                 song_queue.append(track)
@@ -393,6 +485,11 @@ async def play_slash(interaction: discord.Interaction, query: str):
                     message = await interaction.followup.send(embed=embed, view=MusicButtons())
                     current_playing_message = message.id
                     print(f"Playing track: {track.title}")
+                    await update_bot_status(interaction.guild.id, player)
+                    # Hủy task auto-disconnect nếu có
+                    if interaction.guild.id in auto_disconnect_task:
+                        auto_disconnect_task[interaction.guild.id].cancel()
+                        del auto_disconnect_task[interaction.guild.id]
                 else:
                     embed = discord.Embed(
                         title="Đã thêm vào hàng đợi",
@@ -403,6 +500,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
                     embed.add_field(name="Thời lượng", value=format_duration(track.length), inline=True)
                     await interaction.followup.send(embed=embed)
                     print(f"Added to queue: {track.title}")
+                    await update_bot_status(interaction.guild.id)
 
         except discord.HTTPException as e:
             if e.status == 429:
@@ -460,10 +558,11 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
         )
         await interaction.response.send_message(embed=embed)
     await interaction.followup.send(f"Volume đã được đặt thành {saved_volume}%", ephemeral=True, delete_after=5)
+    await update_bot_status(interaction.guild.id, player)
 
 @bot.tree.command(name="skip", description="Bỏ qua bài hát hiện tại")
 async def skip_slash(interaction: discord.Interaction):
-    global current_playing_message, song_queue, is_skipping
+    global current_playing_message, song_queue, is_skipping, auto_disconnect_task
     if not interaction.guild.voice_client or is_skipping:
         await interaction.response.send_message("Không thể bỏ qua ngay bây giờ.", ephemeral=True)
         return
@@ -474,11 +573,15 @@ async def skip_slash(interaction: discord.Interaction):
     is_skipping = False
     if song_queue:
         await play_next(interaction.channel)
+    else:
+        if interaction.guild.id not in auto_disconnect_task:
+            auto_disconnect_task[interaction.guild.id] = asyncio.create_task(auto_disconnect(interaction.guild.id, player))
     await interaction.response.send_message("Đã bỏ qua bài hát.", ephemeral=True, delete_after=5)
+    await update_bot_status(interaction.guild.id)
 
 @bot.tree.command(name="stop", description="Dừng nhạc và xóa queue")
 async def stop_slash(interaction: discord.Interaction):
-    global current_playing_message, song_queue
+    global current_playing_message, song_queue, auto_disconnect_task
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.stop()
         song_queue.clear()
@@ -487,6 +590,9 @@ async def stop_slash(interaction: discord.Interaction):
             title="Dừng", description="Đã dừng nhạc và xóa queue.", color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed)
+        if interaction.guild.id not in auto_disconnect_task:
+            auto_disconnect_task[interaction.guild.id] = asyncio.create_task(auto_disconnect(interaction.guild.id, interaction.guild.voice_client))
+        await update_bot_status(interaction.guild.id)
     else:
         embed = discord.Embed(
             title="Lỗi", description="Không có nhạc đang phát!", color=discord.Color.red()
@@ -495,13 +601,18 @@ async def stop_slash(interaction: discord.Interaction):
 
 @bot.tree.command(name="leave", description="Rời voice channel")
 async def leave_slash(interaction: discord.Interaction):
-    global current_playing_message, song_queue
+    global current_playing_message, song_queue, auto_disconnect_task
     if interaction.guild.voice_client:
+        guild_id = interaction.guild.id
+        if guild_id in auto_disconnect_task:
+            auto_disconnect_task[guild_id].cancel()
+            del auto_disconnect_task[guild_id]
         song_queue.clear()
         await interaction.guild.voice_client.disconnect()
         current_playing_message = None
         embed = discord.Embed(title="Rời", description="Đã rời voice channel.", color=discord.Color.blue())
         await interaction.response.send_message(embed=embed)
+        await update_bot_status(guild_id)
     else:
         embed = discord.Embed(
             title="Lỗi", description="Bot không ở trong voice channel!", color=discord.Color.red()
@@ -528,6 +639,7 @@ async def queue_slash(interaction: discord.Interaction):
         embed.set_footer(text=f"Trang {view.current_page}/{view.total_pages}")
     await interaction.followup.send(embed=embed, view=view)
     await interaction.followup.send("Đã hiển thị hàng đợi.", ephemeral=True, delete_after=5)
+    await update_bot_status(interaction.guild.id)
 
 @bot.tree.command(name="help", description="Hiển thị danh sách lệnh")
 async def help_slash(interaction: discord.Interaction):
@@ -582,6 +694,7 @@ async def loop_slash(interaction: discord.Interaction, times: str = None):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
     await interaction.response.send_message(embed=embed)
+    await update_bot_status(interaction.guild.id, player)
 
 if __name__ == "__main__":
     bot.run(TOKEN)
