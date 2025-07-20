@@ -132,17 +132,32 @@ class MusicButtons(discord.ui.View):
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.danger, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         global current_playing_message, song_queue, is_skipping
-        if not interaction.guild.voice_client or is_skipping:
+        if not interaction.guild.voice_client:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+            return
+        if is_skipping:
             await interaction.response.defer()
             return
         is_skipping = True
         player = interaction.guild.voice_client
+        player_id = id(player)
         await player.stop()
         current_playing_message = None
+        # Clear loop settings for this player
+        if player_id in loop_count:
+            del loop_count[player_id]
+        if player_id in loop_active:
+            del loop_active[player_id]
+        if player_id in loop_track:
+            del loop_track[player_id]
         if song_queue:
             await play_next(interaction.channel)
-        is_skipping = False
+        else:
+            if interaction.guild.id not in auto_disconnect_task:
+                auto_disconnect_task[interaction.guild.id] = asyncio.create_task(auto_disconnect(interaction.guild.id, player))
         await interaction.response.send_message("Skipped the current track.", ephemeral=True, delete_after=5)
+        is_skipping = False
 
     @discord.ui.button(label="Volume Up", style=discord.ButtonStyle.secondary, emoji="🔊")
     async def volume_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -219,15 +234,24 @@ class MusicButtons(discord.ui.View):
         global current_playing_message, song_queue, auto_disconnect_task
         if interaction.guild.voice_client:
             guild_id = interaction.guild.id
+            player_id = id(interaction.guild.voice_client)
             if guild_id in auto_disconnect_task:
                 auto_disconnect_task[guild_id].cancel()
                 del auto_disconnect_task[guild_id]
+            # Clear loop settings
+            if player_id in loop_count:
+                del loop_count[player_id]
+            if player_id in loop_active:
+                del loop_active[player_id]
+            if player_id in loop_track:
+                del loop_track[player_id]
             await interaction.guild.voice_client.stop()
             song_queue.clear()
             current_playing_message = None
             await update_bot_status(guild_id)
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Stopped", description="Stopped the music and cleared the queue.", color=discord.Color.blue()), delete_after=5)
+            embed = discord.Embed(
+                title="Stopped", description="Stopped the music and cleared the queue.", color=discord.Color.blue())
+            await interaction.response.send_message(embed=embed, delete_after=5)
         else:
             await interaction.response.send_message(embed=discord.Embed(
                 title="Error", description="No music is playing!", color=discord.Color.red()), ephemeral=True)
@@ -284,12 +308,10 @@ async def on_ready():
     try:
         await wavelink.Pool.connect(
             client=bot,
-            nodes=[
-                wavelink.Node(
-                    uri='wss://lava-v4.ajieblogs.eu.org:443',
-                    password='https://dsc.gg/ajidevserver'
-                )
-            ]
+            nodes=[wavelink.Node(
+                uri='wss://lava-v4.ajieblogs.eu.org:443',
+                password='https://dsc.gg/ajidevserver'
+            )]
         )
         print("Connected to Lavalink node")
         await sync_commands()  # Sync slash commands on startup
@@ -623,14 +645,25 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
 @bot.tree.command(name="skip", description="Skip the current track")
 async def skip_slash(interaction: discord.Interaction):
     global current_playing_message, song_queue, is_skipping, auto_disconnect_task
-    if not interaction.guild.voice_client or is_skipping:
+    if not interaction.guild.voice_client:
+        await interaction.response.send_message(embed=discord.Embed(
+            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        return
+    if is_skipping:
         await interaction.response.send_message("Cannot skip right now.", ephemeral=True)
         return
     is_skipping = True
     player = interaction.guild.voice_client
+    player_id = id(player)
     await player.stop()
     current_playing_message = None
-    is_skipping = False
+    # Clear loop settings
+    if player_id in loop_count:
+        del loop_count[player_id]
+    if player_id in loop_active:
+        del loop_active[player_id]
+    if player_id in loop_track:
+        del loop_track[player_id]
     if song_queue:
         await play_next(interaction.channel)
     else:
@@ -640,11 +673,24 @@ async def skip_slash(interaction: discord.Interaction):
     await asyncio.sleep(5)
     await message.delete()
     await update_bot_status(interaction.guild.id)
+    is_skipping = False
 
 @bot.tree.command(name="stop", description="Stop the music and clear the queue")
 async def stop_slash(interaction: discord.Interaction):
     global current_playing_message, song_queue, auto_disconnect_task
     if interaction.guild.voice_client:
+        guild_id = interaction.guild.id
+        player_id = id(interaction.guild.voice_client)
+        if guild_id in auto_disconnect_task:
+            auto_disconnect_task[guild_id].cancel()
+            del auto_disconnect_task[guild_id]
+        # Clear loop settings
+        if player_id in loop_count:
+            del loop_count[player_id]
+        if player_id in loop_active:
+            del loop_active[player_id]
+        if player_id in loop_track:
+            del loop_track[player_id]
         await interaction.guild.voice_client.stop()
         song_queue.clear()
         current_playing_message = None
@@ -652,9 +698,9 @@ async def stop_slash(interaction: discord.Interaction):
             title="Stopped", description="Stopped the music and cleared the queue.", color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed, delete_after=5)
-        if interaction.guild.id not in auto_disconnect_task:
-            auto_disconnect_task[interaction.guild.id] = asyncio.create_task(auto_disconnect(interaction.guild.id, interaction.guild.voice_client))
-        await update_bot_status(interaction.guild.id)
+        if guild_id not in auto_disconnect_task:
+            auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, interaction.guild.voice_client))
+        await update_bot_status(guild_id)
     else:
         await interaction.response.send_message(embed=discord.Embed(
             title="Error", description="No music is playing!", color=discord.Color.red()), ephemeral=True)
@@ -664,9 +710,17 @@ async def leave_slash(interaction: discord.Interaction):
     global current_playing_message, song_queue, auto_disconnect_task
     if interaction.guild.voice_client:
         guild_id = interaction.guild.id
+        player_id = id(interaction.guild.voice_client)
         if guild_id in auto_disconnect_task:
             auto_disconnect_task[guild_id].cancel()
             del auto_disconnect_task[guild_id]
+        # Clear loop settings
+        if player_id in loop_count:
+            del loop_count[player_id]
+        if player_id in loop_active:
+            del loop_active[player_id]
+        if player_id in loop_track:
+            del loop_track[player_id]
         song_queue.clear()
         await interaction.guild.voice_client.disconnect()
         current_playing_message = None
