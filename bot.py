@@ -485,87 +485,178 @@ async def play_slash(interaction: discord.Interaction, query: str):
     async with interaction.channel.typing():
         for attempt in range(5):
             try:
-                tracks = await wavelink.Playable.search(query, source=None)
-                if not tracks:
-                    embed = discord.Embed(
-                        title="Error", description="No song or playlist found!", color=discord.Color.red()
-                    )
-                    await interaction.followup.send(embed=embed)
-                    print("No song found")
-                    return
-
-                if isinstance(tracks, wavelink.Playlist):
-                    for track in tracks.tracks:
-                        song_queue.append(track)
-                    embed = discord.Embed(
-                        title="Added Playlist",
-                        description=f"Added {len(tracks.tracks)} tracks from playlist '{tracks.name}' to the queue",
-                        color=discord.Color.blue()
-                    )
-                    if not player.playing and song_queue:
-                        track = song_queue.popleft()
-                        await player.play(track)
+                # Check if query is a URL (e.g., starts with http:// or https://)
+                if query.startswith(('http://', 'https://')):
+                    tracks = await wavelink.Playable.search(query)
+                    if not tracks:
                         embed = discord.Embed(
-                            title="Now Playing", 
-                            description=f"**[{track.title}]({track.uri})**", 
-                            color=discord.Color.green()
+                            title="Error", description="No song or playlist found from the link!", color=discord.Color.red()
                         )
-                        embed.add_field(name="Source", value=track.source, inline=True)
-                        embed.add_field(name="Volume", value=f"{saved_volumes.get(guild_id, 50)}%", inline=True)
-                        embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
-                        if hasattr(track, 'author'):
-                            embed.add_field(name="Artist", value=track.author, inline=True)
-                        if hasattr(track, 'thumbnail'):
-                            embed.set_thumbnail(url=track.thumbnail)
-                        message = await interaction.followup.send(embed=embed, view=MusicButtons())
-                        current_playing_message = message.id
-                        print(f"Playing track: {track.title} from {track.source}")
-                        await update_bot_status(interaction.guild.id, player)
-                        if interaction.guild.id in auto_disconnect_task:
-                            auto_disconnect_task[interaction.guild.id].cancel()
-                            del auto_disconnect_task[interaction.guild.id]
-                    else:
                         await interaction.followup.send(embed=embed)
-                        print(f"Added {len(tracks.tracks)} tracks from playlist to queue")
-                        await update_bot_status(interaction.guild.id)
-                else:
-                    track = tracks[0]
-                    song_queue.append(track)
-                    if not player.playing:
-                        track = song_queue.popleft()
-                        await player.play(track)
+                        print("No song found from link")
+                        return
+
+                    if isinstance(tracks, wavelink.Playlist):
+                        for track in tracks.tracks:
+                            song_queue.append(track)
                         embed = discord.Embed(
-                            title="Now Playing", 
-                            description=f"**[{track.title}]({track.uri})**", 
-                            color=discord.Color.green()
-                        )
-                        embed.add_field(name="Source", value=track.source, inline=True)
-                        embed.add_field(name="Volume", value=f"{saved_volumes.get(guild_id, 50)}%", inline=True)
-                        embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
-                        if hasattr(track, 'author'):
-                            embed.add_field(name="Artist", value=track.author, inline=True)
-                        if hasattr(track, 'thumbnail'):
-                            embed.set_thumbnail(url=track.thumbnail)
-                        message = await interaction.followup.send(embed=embed, view=MusicButtons())
-                        current_playing_message = message.id
-                        print(f"Playing track: {track.title} from {track.source}")
-                        await update_bot_status(interaction.guild.id, player)
-                        if interaction.guild.id in auto_disconnect_task:
-                            auto_disconnect_task[interaction.guild.id].cancel()
-                            del auto_disconnect_task[interaction.guild.id]
-                    else:
-                        embed = discord.Embed(
-                            title="Added to Queue",
-                            description=f"**[{track.title}]({track.uri})**",
+                            title="Added Playlist",
+                            description=f"Added {len(tracks.tracks)} tracks from playlist '{tracks.name}' to the queue",
                             color=discord.Color.blue()
                         )
-                        embed.add_field(name="Source", value=track.source, inline=True)
-                        embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
-                        if hasattr(track, 'author'):
-                            embed.add_field(name="Artist", value=track.author, inline=True)
+                        if not player.playing and song_queue:
+                            track = song_queue.popleft()
+                            await player.play(track)
+                            embed = discord.Embed(
+                                title="Now Playing", 
+                                description=f"**[{track.title}]({track.uri})**", 
+                                color=discord.Color.green()
+                            )
+                            embed.add_field(name="Source", value=track.source, inline=True)
+                            embed.add_field(name="Volume", value=f"{saved_volumes.get(guild_id, 50)}%", inline=True)
+                            embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
+                            if hasattr(track, 'author'):
+                                embed.add_field(name="Artist", value=track.author, inline=True)
+                            if hasattr(track, 'thumbnail'):
+                                embed.set_thumbnail(url=track.thumbnail)
+                            message = await interaction.followup.send(embed=embed, view=MusicButtons())
+                            current_playing_message = message.id
+                            print(f"Playing track: {track.title} from {track.source}")
+                            await update_bot_status()
+                            if interaction.guild.id in auto_disconnect_task:
+                                auto_disconnect_task[interaction.guild.id].cancel()
+                                del auto_disconnect_task[interaction.guild.id]
+                        else:
+                            await interaction.followup.send(embed=embed)
+                            print(f"Added {len(tracks.tracks)} tracks from playlist to queue")
+                            await update_bot_status()
+                    else:
+                        track = tracks[0]
+                        song_queue.append(track)
+                        if not player.playing:
+                            track = song_queue.popleft()
+                            await player.play(track)
+                            embed = discord.Embed(
+                                title="Now Playing", 
+                                description=f"**[{track.title}]({track.uri})**", 
+                                color=discord.Color.green()
+                            )
+                            embed.add_field(name="Source", value=track.source, inline=True)
+                            embed.add_field(name="Volume", value=f"{saved_volumes.get(guild_id, 50)}%", inline=True)
+                            embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
+                            if hasattr(track, 'author'):
+                                embed.add_field(name="Artist", value=track.author, inline=True)
+                            if hasattr(track, 'thumbnail'):
+                                embed.set_thumbnail(url=track.thumbnail)
+                            message = await interaction.followup.send(embed=embed, view=MusicButtons())
+                            current_playing_message = message.id
+                            print(f"Playing track: {track.title} from {track.source}")
+                            await update_bot_status()
+                            if interaction.guild.id in auto_disconnect_task:
+                                auto_disconnect_task[interaction.guild.id].cancel()
+                                del auto_disconnect_task[interaction.guild.id]
+                        else:
+                            embed = discord.Embed(
+                                title="Added to Queue",
+                                description=f"**[{track.title}]({track.uri})**",
+                                color=discord.Color.blue()
+                            )
+                            embed.add_field(name="Source", value=track.source, inline=True)
+                            embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
+                            if hasattr(track, 'author'):
+                                embed.add_field(name="Artist", value=track.author, inline=True)
+                            await interaction.followup.send(embed=embed)
+                            print(f"Added to queue: {track.title} from {track.source}")
+                            await update_bot_status()
+                else:
+                    # Search by name with source
+                    sources = ['youtube', 'spotify', 'soundcloud']  # Supported sources
+                    source = None
+                    for s in sources:
+                        if s in query.lower():
+                            source = s
+                            query = query.lower().replace(s, '').strip()
+                            break
+                    if not source:
+                        embed = discord.Embed(
+                            title="Error", description="Please specify a source (e.g., 'song name youtube' or 'song name spotify')!", color=discord.Color.red()
+                        )
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        print("No source specified for name search")
+                        return
+
+                    tracks = await wavelink.Playable.search(query, source=source)
+                    if not tracks:
+                        embed = discord.Embed(
+                            title="Error", description=f"No results found on {source}!", color=discord.Color.red()
+                        )
                         await interaction.followup.send(embed=embed)
-                        print(f"Added to queue: {track.title} from {track.source}")
-                        await update_bot_status(interaction.guild.id)
+                        print(f"No results found on {source}")
+                        return
+
+                    # Create selection view for tracks
+                    class TrackSelection(discord.ui.View):
+                        def __init__(self, tracks, interaction):
+                            super().__init__(timeout=60)
+                            self.tracks = tracks
+                            self.interaction = interaction
+                            self.add_items()
+
+                        def add_items(self):
+                            for i, track in enumerate(self.tracks[:5]):  # Limit to 5 options
+                                button = discord.ui.Button(label=f"{i + 1}. {track.title[:50]}...", style=discord.ButtonStyle.primary)
+                                async def callback(interaction):
+                                    selected_track = self.tracks[i]
+                                    song_queue.append(selected_track)
+                                    if not player.playing:
+                                        selected_track = song_queue.popleft()
+                                        await player.play(selected_track)
+                                        embed = discord.Embed(
+                                            title="Now Playing", 
+                                            description=f"**[{selected_track.title}]({selected_track.uri})**", 
+                                            color=discord.Color.green()
+                                        )
+                                        embed.add_field(name="Source", value=selected_track.source, inline=True)
+                                        embed.add_field(name="Volume", value=f"{saved_volumes.get(guild_id, 50)}%", inline=True)
+                                        embed.add_field(name="Duration", value=format_duration(selected_track.length), inline=True)
+                                        if hasattr(selected_track, 'author'):
+                                            embed.add_field(name="Artist", value=selected_track.author, inline=True)
+                                        if hasattr(selected_track, 'thumbnail'):
+                                            embed.set_thumbnail(url=selected_track.thumbnail)
+                                        message = await self.interaction.followup.send(embed=embed, view=MusicButtons())
+                                        current_playing_message = message.id
+                                        print(f"Playing selected track: {selected_track.title} from {selected_track.source}")
+                                        await update_bot_status()
+                                        if interaction.guild.id in auto_disconnect_task:
+                                            auto_disconnect_task[interaction.guild.id].cancel()
+                                            del auto_disconnect_task[interaction.guild.id]
+                                    else:
+                                        embed = discord.Embed(
+                                            title="Added to Queue",
+                                            description=f"**[{selected_track.title}]({selected_track.uri})**",
+                                            color=discord.Color.blue()
+                                        )
+                                        embed.add_field(name="Source", value=selected_track.source, inline=True)
+                                        embed.add_field(name="Duration", value=format_duration(selected_track.length), inline=True)
+                                        if hasattr(selected_track, 'author'):
+                                            embed.add_field(name="Artist", value=selected_track.author, inline=True)
+                                        await self.interaction.followup.send(embed=embed)
+                                        print(f"Added to queue: {selected_track.title} from {selected_track.source}")
+                                        await update_bot_status()
+                                    self.stop()
+                                button.callback = callback
+                                self.add_item(button)
+
+                    # Display search results
+                    embed = discord.Embed(
+                        title="Search Results",
+                        description=f"Found tracks on {source}. Select a track by clicking a button below:",
+                        color=discord.Color.blue()
+                    )
+                    view = TrackSelection(tracks, interaction)
+                    await interaction.followup.send(embed=embed, view=view)
+                    print(f"Displayed {len(tracks)} search results on {source}")
+
                 break
             except discord.HTTPException as e:
                 if e.status == 429:
