@@ -850,5 +850,7 @@ if __name__ == "__main__":
     if is_already_running():
         print("Another instance of the bot is already running. Exiting...")
         exit(1)
-    asyncio.run(login_with_retry(bot, TOKEN))
-    bot.run(TOKEN)
+    async def start_bot():
+        await login_with_retry(bot, TOKEN)
+        await bot.start(TOKEN)
+    asyncio.run(start_bot())
