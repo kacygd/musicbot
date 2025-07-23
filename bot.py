@@ -78,33 +78,12 @@ def format_duration(length):
     minutes, seconds = divmod(seconds, 60)
     return f"{minutes}:{seconds:02d}"
 
-# Update bot status
+# Update bot status (fixed to avoid excessive API calls)
 async def update_bot_status(guild_id=None, player=None):
-    global last_status_update
-    current_time = time.time()
-    if last_status_update and (current_time - last_status_update < status_update_interval):
-        return
-    last_status_update = current_time
-    guild_count = len(bot.guilds)
-    try:
-        if player and player.playing and player.current:
-            await bot.change_presence(activity=discord.Activity(
-                type=discord.ActivityType.playing, 
-                name=f"music in {guild_count} servers"
-            ))
-        elif song_queue:
-            await bot.change_presence(activity=discord.Activity(
-                type=discord.ActivityType.watching, 
-                name=f"queue: {len(song_queue)} tracks in {guild_count} servers"
-            ))
-        else:
-            await bot.change_presence(activity=discord.Activity(
-                type=discord.ActivityType.playing, 
-                name="Use /help for commands"
-            ))
-        print(f"Updated bot status for guild {guild_id}")
-    except Exception as e:
-        print(f"Error updating bot status: {e}")
+    await bot.change_presence(activity=discord.Activity(
+        type=discord.ActivityType.playing,
+        name="Use /help for commands"
+    ))
 
 # Auto-disconnect from voice channel
 async def auto_disconnect(guild_id, player):
