@@ -237,7 +237,7 @@ class MusicButtons(discord.ui.View):
                 del loop_active[player_id]
             if player_id in loop_track:
                 del loop_track[player_id]
-            await play_next(interaction.channel, amount=1)
+            await play_next(interaction.channel, amount=1, is_button=True)
             message = await interaction.followup.send("Skipped the current track.", ephemeral=True)
             await asyncio.sleep(5)
             await message.delete()
@@ -426,6 +426,9 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
     player_id = id(player)
     current_track = loop_track.get(player_id)
 
+    if is_skipping:
+        return  # Skip further processing if a manual skip is in progress
+
     if current_track and player_id in loop_count and loop_count[player_id] > 0 and loop_active.get(player_id, False):
         loop_count[player_id] -= 1
         try:
@@ -433,7 +436,8 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
             await update_bot_status(guild_id, player)
         except Exception as e:
             with open('bot.log', 'a') as f:
-                f.write(f"{time.ctime()}: Error replaying track: {e}\n")
+                f.write(f"{time.ctime()}: Error replaying track Ons hàng tiếp theo
+track: {e}\n")
         return
     elif player_id in loop_count and loop_count[player_id] == 0:
         del loop_count[player_id]
@@ -446,7 +450,7 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
         return
 
     if channel and song_queue:
-        await play_next(channel)
+        await play_next(channel, amount=1, is_button=False)
     elif channel and not song_queue:
         if guild_id not in auto_disconnect_task:
             auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
@@ -468,8 +472,8 @@ async def on_voice_state_update(member, before, after):
         auto_disconnect_task[guild_id].cancel()
         del auto_disconnect_task[guild_id]
 
-async def play_next(channel, amount=1):
-    global current_playing_message, saved_volumes, auto_disconnect_task
+async def play_next(channel, amount=1, is_button=False):
+    global current_playing_message, saved_volumes, auto_disconnect_task, is_skipping
     if not channel.guild or not channel.guild.voice_client:
         return
     for attempt in range(5):
@@ -484,6 +488,7 @@ async def play_next(channel, amount=1):
                 message = await channel.send(embed=embed)
                 await asyncio.sleep(5)
                 await message.delete()
+                is_skipping = False
                 return
             for _ in range(amount):
                 if song_queue:
@@ -540,6 +545,9 @@ async def play_next(channel, amount=1):
             with open('bot.log', 'a') as f:
                 f.write(f"{time.ctime()}: Error playing track: {e}\n")
             break
+        finally:
+            if not is_button:
+                is_skipping = False
 
 @bot.tree.command(name="ping", description="Check bot's latency")
 async def ping_slash(interaction: discord.Interaction):
@@ -855,7 +863,7 @@ async def skip_slash(interaction: discord.Interaction, amount: int = 1):
             title="Error", description="Skip amount must be at least 1!", color=discord.Color.red()), ephemeral=True)
         return
     if is_skipping:
-        await interaction.response.send_message("Cannot skip right now.", ephemeral=True)
+        await interaction.response.send_message("Cannot skip right now. Please wait a moment.", ephemeral=True)
         return
     await interaction.response.defer()
     is_skipping = True
@@ -869,7 +877,7 @@ async def skip_slash(interaction: discord.Interaction, amount: int = 1):
             del loop_active[player_id]
         if player_id in loop_track:
             del loop_track[player_id]
-        await play_next(interaction.channel, amount=amount)
+        await play_next(interaction.channel, amount=amount, is_button=False)
         message = await interaction.followup.send(f"Skipped {amount} track(s).", ephemeral=True)
         await asyncio.sleep(5)
         await message.delete()
