@@ -126,8 +126,12 @@ async def auto_disconnect(guild_id, player):
         del auto_disconnect_task[guild_id]
 
 class MusicButtons(discord.ui.View):
-    def __init__(self):
+    def __init__(self, player=None):
         super().__init__(timeout=None)
+        self.player = player
+        if player:
+            self.pause_button.disabled = player.paused
+            self.resume_button.disabled = not player.paused
 
     async def update_embed(self, interaction, player, status):
         embed = discord.Embed(
@@ -148,66 +152,52 @@ class MusicButtons(discord.ui.View):
     async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         global current_playing_message
         if not interaction.guild or not interaction.guild.voice_client:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
             return
         player = interaction.guild.voice_client
         if not player.playing or player.paused:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="No track is playing or already paused!", color=discord.Color.red()), ephemeral=True)
             return
         await player.pause(True)
+        self.pause_button.disabled = True
+        self.resume_button.disabled = False
         if current_playing_message:
             try:
                 message = await interaction.channel.fetch_message(current_playing_message)
                 embed = await self.update_embed(interaction, player, "Paused")
-                self.children[0].label = "Resume"
-                self.children[0].emoji = "▶️"
                 await message.edit(embed=embed, view=self)
             except:
                 embed = await self.update_embed(interaction, player, "Paused")
-                self.children[0].label = "Resume"
-                self.children[0].emoji = "▶️"
                 message = await interaction.channel.send(embed=embed, view=self)
                 current_playing_message = message.id
-        await interaction.response.send_message("Paused the current track.", ephemeral=True, delete_after=5)
+        await interaction.response.defer()
         await update_bot_status(interaction.guild_id)
 
     @discord.ui.button(label="Resume", style=discord.ButtonStyle.secondary, emoji="▶️")
     async def resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         global current_playing_message
         if not interaction.guild or not interaction.guild.voice_client:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
             return
         player = interaction.guild.voice_client
         if not player.paused:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Track is not paused!", color=discord.Color.red()), ephemeral=True)
             return
         await player.pause(False)
+        self.pause_button.disabled = False
+        self.resume_button.disabled = True
         if current_playing_message:
             try:
                 message = await interaction.channel.fetch_message(current_playing_message)
                 embed = await self.update_embed(interaction, player, "Playing")
-                self.children[0].label = "Pause"
-                self.children[0].emoji = "⏸️"
                 await message.edit(embed=embed, view=self)
             except:
                 embed = await self.update_embed(interaction, player, "Playing")
-                self.children[0].label = "Pause"
-                self.children[0].emoji = "⏸️"
                 message = await interaction.channel.send(embed=embed, view=self)
                 current_playing_message = message.id
-        await interaction.response.send_message("Resumed the current track.", ephemeral=True, delete_after=5)
+        await interaction.response.defer()
         await update_bot_status(interaction.guild_id)
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.danger, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         global current_playing_message, song_queue, is_skipping
         if not interaction.guild or not interaction.guild.voice_client:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
             return
         if is_skipping:
             await interaction.response.defer()
@@ -228,15 +218,13 @@ class MusicButtons(discord.ui.View):
         else:
             if interaction.guild_id not in auto_disconnect_task:
                 auto_disconnect_task[interaction.guild_id] = asyncio.create_task(auto_disconnect(interaction.guild_id, player))
-        await interaction.response.send_message("Skipped the current track.", ephemeral=True, delete_after=5)
+        await interaction.response.defer()
         is_skipping = False
 
     @discord.ui.button(label="Volume Up", style=discord.ButtonStyle.secondary, emoji="🔊")
     async def volume_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         global current_playing_message, saved_volumes
         if not interaction.guild or not interaction.guild.voice_client:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
             return
         player = interaction.guild.voice_client
         guild_id = str(interaction.guild_id)
@@ -263,7 +251,7 @@ class MusicButtons(discord.ui.View):
                     embed.add_field(name="Artist", value=player.current.author, inline=True)
                 if hasattr(player.current, 'thumbnail'):
                     embed.set_thumbnail(url=player.current.thumbnail)
-                message = await interaction.channel.send(embed=embed, view=self)
+                message = await interaction.channel.send(embed=embed, view=MusicButtons(player=player))
                 current_playing_message = message.id
         await interaction.response.defer()
 
@@ -271,8 +259,6 @@ class MusicButtons(discord.ui.View):
     async def volume_down_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         global current_playing_message, saved_volumes
         if not interaction.guild or not interaction.guild.voice_client:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
             return
         player = interaction.guild.voice_client
         guild_id = str(interaction.guild_id)
@@ -299,7 +285,7 @@ class MusicButtons(discord.ui.View):
                     embed.add_field(name="Artist", value=player.current.author, inline=True)
                 if hasattr(player.current, 'thumbnail'):
                     embed.set_thumbnail(url=player.current.thumbnail)
-                message = await interaction.channel.send(embed=embed, view=self)
+                message = await interaction.channel.send(embed=embed, view=MusicButtons(player=player))
                 current_playing_message = message.id
         await interaction.response.defer()
 
@@ -326,8 +312,7 @@ class MusicButtons(discord.ui.View):
                 title="Stopped", description="Stopped music and cleared the queue.", color=discord.Color.blue())
             await interaction.response.send_message(embed=embed, delete_after=5)
         else:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="No music is playing!", color=discord.Color.red()), ephemeral=True)
+            await interaction.response.defer()
 
 class QueueView(discord.ui.View):
     def __init__(self, song_queue):
@@ -474,7 +459,7 @@ async def play_next(channel):
                     embed.add_field(name="Artist", value=track.author, inline=True)
                 if hasattr(track, 'thumbnail'):
                     embed.set_thumbnail(url=track.thumbnail)
-                message = await channel.send(embed=embed, view=MusicButtons())
+                message = await channel.send(embed=embed, view=MusicButtons(player=player))
                 current_playing_message = message.id
                 await update_bot_status(channel.guild_id, player)
                 if channel.guild_id in auto_disconnect_task:
@@ -521,7 +506,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
         embed = discord.Embed(
             title="Error", description="You need to be in a voice channel to play music!", color=discord.Color.red()
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed)
         return
 
     channel = interaction.user.voice.channel
@@ -541,13 +526,13 @@ async def play_slash(interaction: discord.Interaction, query: str):
                     await asyncio.sleep(5 * (attempt + 1))
                 else:
                     embed = discord.Embed(title="Error", description=f"Error connecting to voice channel: {e}", color=discord.Color.red())
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    await interaction.followup.send(embed=embed)
                     with open('bot.log', 'a') as f:
                         f.write(f"{time.ctime()}: Failed to connect to voice channel: {e}\n")
                     return
             except Exception as e:
                 embed = discord.Embed(title="Error", description=f"Error connecting to voice channel: {e}", color=discord.Color.red())
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed)
                 with open('bot.log', 'a') as f:
                     f.write(f"{time.ctime()}: Unexpected error during voice channel connection: {e}\n")
                 return
@@ -593,7 +578,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
                             embed.add_field(name="Artist", value=track.author, inline=True)
                         if hasattr(track, 'thumbnail'):
                             embed.set_thumbnail(url=track.thumbnail)
-                        message = await interaction.followup.send(embed=embed, view=MusicButtons())
+                        message = await interaction.followup.send(embed=embed, view=MusicButtons(player=player))
                         current_playing_message = message.id
                         await update_bot_status()
                         if interaction.guild_id in auto_disconnect_task:
@@ -619,7 +604,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
                             embed.add_field(name="Artist", value=track.author, inline=True)
                         if hasattr(track, 'thumbnail'):
                             embed.set_thumbnail(url=track.thumbnail)
-                        message = await interaction.followup.send(embed=embed, view=MusicButtons())
+                        message = await interaction.followup.send(embed=embed, view=MusicButtons(player=player))
                         current_playing_message = message.id
                         await update_bot_status()
                         if interaction.guild_id in auto_disconnect_task:
@@ -659,13 +644,17 @@ async def play_slash(interaction: discord.Interaction, query: str):
 async def pause_slash(interaction: discord.Interaction):
     global current_playing_message
     if not interaction.guild or not interaction.guild.voice_client:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     player = interaction.guild.voice_client
     if not player.playing or player.paused:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="No track is playing or already paused!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="No track is playing or already paused!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     await player.pause(True)
     if current_playing_message:
@@ -683,9 +672,7 @@ async def pause_slash(interaction: discord.Interaction):
                 embed.add_field(name="Artist", value=player.current.author, inline=True)
             if hasattr(player.current, 'thumbnail'):
                 embed.set_thumbnail(url=player.current.thumbnail)
-            view = MusicButtons()
-            view.children[0].label = "Resume"
-            view.children[0].emoji = "▶️"
+            view = MusicButtons(player=player)
             await message.edit(embed=embed, view=view)
         except:
             embed = discord.Embed(
@@ -700,25 +687,26 @@ async def pause_slash(interaction: discord.Interaction):
                 embed.add_field(name="Artist", value=player.current.author, inline=True)
             if hasattr(player.current, 'thumbnail'):
                 embed.set_thumbnail(url=player.current.thumbnail)
-            view = MusicButtons()
-            view.children[0].label = "Resume"
-            view.children[0].emoji = "▶️"
-            message = await interaction.channel.send(embed=embed, view=view)
+            message = await interaction.channel.send(embed=embed, view=MusicButtons(player=player))
             current_playing_message = message.id
-    await interaction.response.send_message("Paused the current track.", ephemeral=True, delete_after=5)
+    await interaction.response.defer()
     await update_bot_status(interaction.guild_id)
 
 @bot.tree.command(name="resume", description="Resume the paused song")
 async def resume_slash(interaction: discord.Interaction):
     global current_playing_message
     if not interaction.guild or not interaction.guild.voice_client:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     player = interaction.guild.voice_client
     if not player.paused:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="Track is not paused!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="Track is not paused!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     await player.pause(False)
     if current_playing_message:
@@ -736,9 +724,7 @@ async def resume_slash(interaction: discord.Interaction):
                 embed.add_field(name="Artist", value=player.current.author, inline=True)
             if hasattr(player.current, 'thumbnail'):
                 embed.set_thumbnail(url=player.current.thumbnail)
-            view = MusicButtons()
-            view.children[0].label = "Pause"
-            view.children[0].emoji = "⏸️"
+            view = MusicButtons(player=player)
             await message.edit(embed=embed, view=view)
         except:
             embed = discord.Embed(
@@ -753,12 +739,9 @@ async def resume_slash(interaction: discord.Interaction):
                 embed.add_field(name="Artist", value=player.current.author, inline=True)
             if hasattr(player.current, 'thumbnail'):
                 embed.set_thumbnail(url=player.current.thumbnail)
-            view = MusicButtons()
-            view.children[0].label = "Pause"
-            view.children[0].emoji = "⏸️"
-            message = await interaction.channel.send(embed=embed, view=view)
+            message = await interaction.channel.send(embed=embed, view=MusicButtons(player=player))
             current_playing_message = message.id
-    await interaction.response.send_message("Resumed the current track.", ephemeral=True, delete_after=5)
+    await interaction.response.defer()
     await update_bot_status(interaction.guild_id)
 
 @bot.tree.command(name="volume", description="Set volume (0-100)")
@@ -780,12 +763,12 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
     guild_id = str(interaction.guild_id)
     saved_volumes[guild_id] = volume
     await player.set_volume(volume)
-    if player.playing and current_playing_message:
+    if player.playing or player.paused:
         try:
             message = await interaction.channel.fetch_message(current_playing_message)
             embed = message.embeds[0]
             embed.set_field_at(1, name="Volume", value=f"{volume}%", inline=True)
-            await message.edit(embed=embed, view=MusicButtons())
+            await message.edit(embed=embed, view=MusicButtons(player=player))
         except:
             embed = discord.Embed(
                 title=f"Now {'Paused' if player.paused else 'Playing'}",
@@ -799,28 +782,28 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
                 embed.add_field(name="Artist", value=player.current.author, inline=True)
             if hasattr(player.current, 'thumbnail'):
                 embed.set_thumbnail(url=player.current.thumbnail)
-            message = await interaction.channel.send(embed=embed, view=MusicButtons())
+            message = await interaction.channel.send(embed=embed, view=MusicButtons(player=player))
             current_playing_message = message.id
     else:
         embed = discord.Embed(
             title="Volume", description=f"Volume set to {volume}%", color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed)
-    message = await interaction.followup.send(f"Volume set to {volume}%", ephemeral=True)
-    await asyncio.sleep(5)
-    await message.delete()
-    await update_bot_status(interaction.guild_id, player)
     save_volumes()
+    await interaction.response.defer()
+    await update_bot_status(interaction.guild_id, player)
 
 @bot.tree.command(name="skip", description="Skip the current song")
 async def skip_slash(interaction: discord.Interaction):
     global current_playing_message, song_queue, is_skipping, auto_disconnect_task
     if not interaction.guild or not interaction.guild.voice_client:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     if is_skipping:
-        await interaction.response.send_message("Cannot skip right now.", ephemeral=True)
+        await interaction.response.defer()
         return
     is_skipping = True
     player = interaction.guild.voice_client
@@ -838,9 +821,7 @@ async def skip_slash(interaction: discord.Interaction):
     else:
         if interaction.guild_id not in auto_disconnect_task:
             auto_disconnect_task[interaction.guild_id] = asyncio.create_task(auto_disconnect(interaction.guild_id, player))
-    message = await interaction.response.send_message("Skipped the current track.", ephemeral=True)
-    await asyncio.sleep(5)
-    await message.delete()
+    await interaction.response.defer()
     await update_bot_status(interaction.guild_id)
     is_skipping = False
 
@@ -870,8 +851,10 @@ async def stop_slash(interaction: discord.Interaction):
             auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, interaction.guild.voice_client))
         await update_bot_status(guild_id)
     else:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="No music is playing!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="No music is playing!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="leave", description="Leave the voice channel")
 async def leave_slash(interaction: discord.Interaction):
@@ -895,8 +878,10 @@ async def leave_slash(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, delete_after=5)
         await update_bot_status(guild_id)
     else:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        embed = discord.Embed(
+            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="queue", description="Display the list of tracks in the queue")
 async def queue_slash(interaction: discord.Interaction):
@@ -917,9 +902,6 @@ async def queue_slash(interaction: discord.Interaction):
             )
         embed.set_footer(text=f"Page {view.current_page}/{view.total_pages}")
     await interaction.followup.send(embed=embed, view=view)
-    message = await interaction.followup.send("Displayed the queue.", ephemeral=True)
-    await asyncio.sleep(5)
-    await message.delete()
     await update_bot_status(interaction.guild_id)
 
 @bot.tree.command(name="help", description="Display the list of commands")
