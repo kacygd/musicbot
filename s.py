@@ -215,6 +215,7 @@ class MusicButtons(discord.ui.View):
         if is_skipping:
             await interaction.response.defer()
             return
+        await interaction.response.defer()  # Đưa ra tín hiệu đang xử lý
         is_skipping = True
         try:
             player = interaction.guild.voice_client
@@ -227,7 +228,11 @@ class MusicButtons(discord.ui.View):
             if player_id in loop_track:
                 del loop_track[player_id]
             await play_next(interaction.channel)
-            await interaction.response.send_message("Skipped the current track.", ephemeral=True, delete_after=5)
+            await interaction.followup.send("Skipped the current track.", ephemeral=True, delete_after=5)
+        except Exception as e:
+            await interaction.followup.send(f"Error skipping track: {e}", ephemeral=True)
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Error in skip_button: {e}\n")
         finally:
             is_skipping = False
         await update_bot_status(interaction.guild.id)
@@ -807,6 +812,7 @@ async def skip_slash(interaction: discord.Interaction):
     if is_skipping:
         await interaction.response.send_message("Cannot skip right now.", ephemeral=True)
         return
+    await interaction.response.defer()  # Đưa ra tín hiệu đang xử lý
     is_skipping = True
     try:
         player = interaction.guild.voice_client
@@ -819,9 +825,11 @@ async def skip_slash(interaction: discord.Interaction):
         if player_id in loop_track:
             del loop_track[player_id]
         await play_next(interaction.channel)
-        message = await interaction.response.send_message("Skipped the current track.", ephemeral=True)
-        await asyncio.sleep(5)
-        await message.delete()
+        await interaction.followup.send("Skipped the current track.", ephemeral=True, delete_after=5)
+    except Exception as e:
+        await interaction.followup.send(f"Error skipping track: {e}", ephemeral=True)
+        with open('bot.log', 'a') as f:
+            f.write(f"{time.ctime()}: Error in skip_slash: {e}\n")
     finally:
         is_skipping = False
     await update_bot_status(interaction.guild.id)
