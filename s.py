@@ -113,8 +113,6 @@ async def auto_disconnect(guild_id, player):
         )
         if player.text_channel:
             message = await player.text_channel.send(embed=embed)
-            await asyncio.sleep(5)
-            await message.delete()
     elif not player.playing and not song_queue:
         song_queue.clear()
         current_playing_message = None
@@ -127,8 +125,6 @@ async def auto_disconnect(guild_id, player):
         )
         if player.text_channel:
             message = await player.text_channel.send(embed=embed)
-            await asyncio.sleep(5)
-            await message.delete()
     if guild_id in auto_disconnect_task:
         del auto_disconnect_task[guild_id]
 
@@ -541,7 +537,7 @@ async def ping_slash(interaction: discord.Interaction):
         description=f"**Latency**: {latency} ms",
         color=discord.Color.blue()
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 @bot.tree.command(name="play", description="Play a song or playlist by URL")
 async def play_slash(interaction: discord.Interaction, query: str):
