@@ -28,6 +28,7 @@ loop_track = {}
 auto_disconnect_task = {}
 bot_start_time = time.time()
 skip_locks = {}  # Per-guild locks for skipping
+is_skipping = False  # Flag to prevent multiple skip triggers
 
 HTML_CONTENT = """Bot is Alive"""
 
@@ -218,27 +219,34 @@ class MusicButtons(discord.ui.View):
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.danger, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global current_playing_message, is_skipping
         if not interaction.guild or not interaction.guild.voice_client:
             await interaction.response.send_message(embed=discord.Embed(
                 title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
             return
-        guild_id = interaction.guild.id
-        if guild_id not in skip_locks:
-            skip_locks[guild_id] = asyncio.Lock()
-        async with skip_locks[guild_id]:
-            player = interaction.guild.voice_client
-            player_id = id(player)
-            await player.stop()
-            if player_id in loop_count:
-                del loop_count[player_id]
-            if player_id in loop_active:
-                del loop_active[player_id]
-            if player_id in loop_track:
-                del loop_track[player_id]
-            await play_next(interaction.channel, amount=1)
-            message = await interaction.followup.send("Skipped the current track.", ephemeral=True)
-            await asyncio.sleep(5)
-            await message.delete()
+        if is_skipping:
+            await interaction.response.defer()
+            return
+        is_skipping = True
+        player = interaction.guild.voice_client
+        player_id = id(player)
+        await player.stop()
+        current_playing_message = None
+        if player_id in loop_count:
+            del loop_count[player_id]
+        if player_id in loop_active:
+            del loop_active[player_id]
+        if player_id in loop_track:
+            del loop_track[player_id]
+        if song_queue:
+            await play_next(interaction.channel)
+        else:
+            if interaction.guild.id not in auto_disconnect_task:
+                auto_disconnect_task[interaction.guild.id] = asyncio.create_task(auto_disconnect(interaction.guild.id, player))
+        await interaction.response.send_message("Skipped the current track.", ephemeral=True)
+        await asyncio.sleep(5)
+        await interaction.delete_original_response()
+        is_skipping = False
         await update_bot_status(interaction.guild.id)
 
     @discord.ui.button(label="Volume Up", style=discord.ButtonStyle.secondary, emoji="🔊")
@@ -410,7 +418,7 @@ async def on_ready():
 
 @bot.event
 async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
-    global current_playing_message, auto_disconnect_task
+    global current_playing_message, is_skipping, auto_disconnect_task
     player = payload.player
     channel = getattr(player, 'text_channel', None)
     guild_id = player.guild.id
@@ -418,10 +426,10 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
     player_id = id(player)
     current_track = loop_track.get(player_id)
 
-    if guild_id in skip_locks and skip_locks[guild_id].locked():
+    if is_skipping:
         with open('bot.log', 'a') as f:
-            f.write(f"{time.ctime()}: Skip lock active, skipping automatic playback for guild {guild_id}\n")
-        return  # Skip automatic playback if a skip operation is in progress
+            f.write(f"{time.ctime()}: Skip in progress, skipping automatic playback for guild {guild_id}\n")
+        return
 
     if current_track and player_id in loop_count and loop_count[player_id] > 0 and loop_active.get(player_id, False):
         loop_count[player_id] -= 1
@@ -445,7 +453,7 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
     if channel and song_queue:
         with open('bot.log', 'a') as f:
             f.write(f"{time.ctime()}: Playing next track from on_wavelink_track_end for guild {guild_id}, queue length: {len(song_queue)}\n")
-        await play_next(channel, amount=1)
+        await play_next(channel)
     elif channel and not song_queue:
         if guild_id not in auto_disconnect_task:
             auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
@@ -467,93 +475,63 @@ async def on_voice_state_update(member, before, after):
         auto_disconnect_task[guild_id].cancel()
         del auto_disconnect_task[guild_id]
 
-async def play_next(channel, amount=1):
-    global current_playing_message, saved_volumes, auto_disconnect_task
-    if not channel.guild or not channel.guild.voice_client:
+async def play_next(channel):
+    global current_playing_message, saved_volumes, is_skipping, auto_disconnect_task
+    if not channel.guild.voice_client:
+        is_skipping = False
         return
-    guild_id = channel.guild.id
-    if guild_id not in skip_locks:
-        skip_locks[guild_id] = asyncio.Lock()
-    async with skip_locks[guild_id]:
-        with open('bot.log', 'a') as f:
-            f.write(f"{time.ctime()}: Entering play_next for guild {guild_id}, requested amount: {amount}, queue length: {len(song_queue)}\n")
-        for attempt in range(5):
-            try:
-                if len(song_queue) < amount:
-                    embed = discord.Embed(
-                        title="Error",
-                        description=f"Not enough tracks in queue to skip {amount}. Only {len(song_queue)} track(s) available.",
-                        color=discord.Color.red()
-                    )
-                    message = await channel.send(embed=embed)
-                    await asyncio.sleep(5)
-                    await message.delete()
-                    with open('bot.log', 'a') as f:
-                        f.write(f"{time.ctime()}: Not enough tracks to skip {amount} for guild {guild_id}\n")
-                    return
-                # Skip the specified number of tracks
-                skipped_tracks = []
-                for _ in range(amount):
-                    if song_queue:
-                        skipped_track = song_queue.popleft()
-                        skipped_tracks.append(skipped_track.title)
-                with open('bot.log', 'a') as f:
-                    f.write(f"{time.ctime()}: Skipped tracks {skipped_tracks} for guild {guild_id}, remaining queue: {list(song_queue)}\n")
-
-                if song_queue:
-                    track = song_queue.popleft()
-                    player = channel.guild.voice_client
-                    volume = saved_volumes.get(guild_id, 50)
-                    await player.set_volume(volume)
-                    await player.play(track)
-                    if player.paused:
-                        await player.pause(True)
-                    embed = discord.Embed(
-                        title="Now Playing",
-                        description=f"**[{track.title}]({track.uri})**",
-                        color=discord.Color.green()
-                    )
-                    embed.add_field(name="Source", value=track.source, inline=True)
-                    embed.add_field(name="Volume", value=f"{volume}%", inline=True)
-                    embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
-                    if hasattr(track, 'author'):
-                        embed.add_field(name="Artist", value=track.author, inline=True)
-                    if hasattr(track, 'thumbnail'):
-                        embed.set_thumbnail(url=track.thumbnail)
-                    message = await channel.send(embed=embed, view=MusicButtons(player))
-                    current_playing_message = message.id
-                    with open('bot.log', 'a') as f:
-                        f.write(f"{time.ctime()}: Now playing {track.title} for guild {guild_id}\n")
-                    await update_bot_status(channel.guild.id, player)
-                    if channel.guild.id in auto_disconnect_task:
-                        auto_disconnect_task[channel.guild.id].cancel()
-                        del auto_disconnect_task[channel.guild.id]
-                else:
-                    if channel.guild.id not in auto_disconnect_task:
-                        auto_disconnect_task[channel.guild.id] = asyncio.create_task(auto_disconnect(channel.guild.id, channel.guild.voice_client))
-                    await update_bot_status(channel.guild.id)
-                    with open('bot.log', 'a') as f:
-                        f.write(f"{time.ctime()}: Queue empty after skip for guild {guild_id}\n")
-                break
-            except discord.HTTPException as e:
-                if e.status == 429:
-                    await asyncio.sleep(5 * (attempt + 1))
-                else:
-                    embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
-                    message = await channel.send(embed=embed)
-                    await asyncio.sleep(5)
-                    await message.delete()
-                    with open('bot.log', 'a') as f:
-                        f.write(f"{time.ctime()}: Error playing track: {e} for guild {guild_id}\n")
-                    break
-            except Exception as e:
+    if is_skipping:
+        is_skipping = False
+        return
+    is_skipping = True
+    for attempt in range(5):
+        try:
+            if song_queue:
+                track = song_queue.popleft()
+                player = channel.guild.voice_client
+                guild_id = channel.guild.id
+                volume = saved_volumes.get(guild_id, 50)
+                await player.set_volume(volume)
+                await player.play(track)
+                embed = discord.Embed(
+                    title="Now Playing",
+                    description=f"**[{track.title}]({track.uri})**",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Source", value=track.source, inline=True)
+                embed.add_field(name="Volume", value=f"{volume}%", inline=True)
+                embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
+                if hasattr(track, 'author'):
+                    embed.add_field(name="Artist", value=track.author, inline=True)
+                if hasattr(track, 'thumbnail'):
+                    embed.set_thumbnail(url=track.thumbnail)
+                message = await channel.send(embed=embed, view=MusicButtons(player))
+                current_playing_message = message.id
+                await update_bot_status(channel.guild.id, player)
+                if channel.guild.id in auto_disconnect_task:
+                    auto_disconnect_task[channel.guild.id].cancel()
+                    del auto_disconnect_task[channel.guild.id]
+            else:
+                if channel.guild.id not in auto_disconnect_task:
+                    auto_disconnect_task[channel.guild.id] = asyncio.create_task(auto_disconnect(channel.guild.id, channel.guild.voice_client))
+                await update_bot_status(channel.guild.id)
+            break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(5 * (attempt + 1))
+            else:
                 embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
                 message = await channel.send(embed=embed)
                 await asyncio.sleep(5)
                 await message.delete()
-                with open('bot.log', 'a') as f:
-                    f.write(f"{time.ctime()}: Error playing track: {e} for guild {guild_id}\n")
                 break
+        except Exception as e:
+            embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
+            message = await channel.send(embed=embed)
+            await asyncio.sleep(5)
+            await message.delete()
+            break
+    is_skipping = False
 
 @bot.tree.command(name="ping", description="Check bot's latency")
 async def ping_slash(interaction: discord.Interaction):
@@ -595,14 +573,10 @@ async def play_slash(interaction: discord.Interaction, query: str):
                 else:
                     embed = discord.Embed(title="Error", description=f"Error connecting to voice channel: {e}", color=discord.Color.red())
                     await interaction.followup.send(embed=embed, ephemeral=True)
-                    with open('bot.log', 'a') as f:
-                        f.write(f"{time.ctime()}: Failed to connect to voice channel: {e}\n")
                     return
             except Exception as e:
                 embed = discord.Embed(title="Error", description=f"Error connecting to voice channel: {e}", color=discord.Color.red())
                 await interaction.followup.send(embed=embed, ephemeral=True)
-                with open('bot.log', 'a') as f:
-                    f.write(f"{time.ctime()}: Unexpected error during voice channel connection: {e}\n")
                 return
 
     async with interaction.channel.typing():
@@ -698,14 +672,10 @@ async def play_slash(interaction: discord.Interaction, query: str):
                 else:
                     embed = discord.Embed(title="Error", description=f"Error: {e}", color=discord.Color.red())
                     await interaction.followup.send(embed=embed)
-                    with open('bot.log', 'a') as f:
-                        f.write(f"{time.ctime()}: Error in play command: {e}\n")
                     return
             except Exception as e:
                 embed = discord.Embed(title="Error", description=f"Error: {e}", color=discord.Color.red())
                 await interaction.followup.send(embed=embed)
-                with open('bot.log', 'a') as f:
-                    f.write(f"{time.ctime()}: Error in play command: {e}\n")
                 return
 
 @bot.tree.command(name="pause", description="Pause the current song")
@@ -857,42 +827,36 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
     await update_bot_status(interaction.guild.id, player)
     save_volumes()
 
-@bot.tree.command(name="skip", description="Skip the current song or a specified number of songs")
-async def skip_slash(interaction: discord.Interaction, amount: int = 1):
+@bot.tree.command(name="skip", description="Skip the current song")
+async def skip_slash(interaction: discord.Interaction):
+    global current_playing_message, is_skipping, auto_disconnect_task
     if not interaction.guild or not interaction.guild.voice_client:
         await interaction.response.send_message(embed=discord.Embed(
             title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
         return
-    if amount < 1:
-        await interaction.response.send_message(embed=discord.Embed(
-            title="Error", description="Skip amount must be at least 1!", color=discord.Color.red()), ephemeral=True)
-        return
-    guild_id = interaction.guild.id
-    if guild_id not in skip_locks:
-        skip_locks[guild_id] = asyncio.Lock()
-    if skip_locks[guild_id].locked():
+    if is_skipping:
         await interaction.response.send_message("Cannot skip right now.", ephemeral=True)
         return
-    await interaction.response.defer()
-    async with skip_locks[guild_id]:
-        try:
-            player = interaction.guild.voice_client
-            player_id = id(player)
-            await player.stop()
-            if player_id in loop_count:
-                del loop_count[player_id]
-            if player_id in loop_active:
-                del loop_active[player_id]
-            if player_id in loop_track:
-                del loop_track[player_id]
-            await play_next(interaction.channel, amount=amount)
-            message = await interaction.followup.send(f"Skipped {amount} track(s).", ephemeral=True)
-            await asyncio.sleep(5)
-            await message.delete()
-        except Exception as e:
-            await interaction.followup.send(f"Error skipping track: {e}", ephemeral=True)
-            with open('bot.log', 'a') as f:
-                f.write(f"{time.ctime()}: Error in skip_slash: {e}\n")
+    is_skipping = True
+    player = interaction.guild.voice_client
+    player_id = id(player)
+    await player.stop()
+    current_playing_message = None
+    if player_id in loop_count:
+        del loop_count[player_id]
+    if player_id in loop_active:
+        del loop_active[player_id]
+    if player_id in loop_track:
+        del loop_track[player_id]
+    if song_queue:
+        await play_next(interaction.channel)
+    else:
+        if interaction.guild.id not in auto_disconnect_task:
+            auto_disconnect_task[interaction.guild.id] = asyncio.create_task(auto_disconnect(interaction.guild.id, player))
+    message = await interaction.response.send_message("Skipped the current track.", ephemeral=True)
+    await asyncio.sleep(5)
+    await message.delete()
+    is_skipping = False
     await update_bot_status(interaction.guild.id)
 
 @bot.tree.command(name="stop", description="Stop music and clear the queue")
