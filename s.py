@@ -285,227 +285,7 @@ class MusicButtons(discord.ui.View):
             await interaction.response.send_message(embed=embed, delete_after=5)
         else:
             await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="No music is playing!", color=discord.Color.red()), ephemeral=True)
-
-# Class for pagination view
-class QueueView(discord.ui.View):
-    def __init__(self, song_queue):
-        super().__init__(timeout=60)
-        self.song_queue = song_queue
-        self.current_page = 1
-        self.per_page = 10
-        self.total_pages = max(1, (len(song_queue) + self.per_page - 1) // self.per_page)
-
-    async def update_embed(self, interaction: discord.Interaction):
-        start_idx = (self.current_page - 1) * self.per_page
-        end_idx = min(start_idx + self.per_page, len(self.song_queue))
-        embed = discord.Embed(title="Queue", color=discord.Color.blue())
-        if not self.song_queue:
-            embed.description = "The queue is currently empty!"
-        else:
-            for i, track in enumerate(list(self.song_queue)[start_idx:end_idx], start_idx + 1):
-                embed.add_field(
-                    name=f"Track {i}: [{track.title}]({track.uri})",
-                    value=f"Duration: {format_duration(track.length)}",
-                    inline=False
-                )
-        embed.set_footer(text=f"Page {self.current_page}/{self.total_pages}")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, emoji="⬅️", disabled=True)
-    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page > 1:
-            self.current_page -= 1
-            self.previous_button.disabled = (self.current_page == 1)
-            self.next_button.disabled = False
-            await self.update_embed(interaction)
-        else:
-            await interaction.response.defer()
-
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, emoji="➡️")
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page < self.total_pages:
-            self.current_page += 1
-            self.previous_button.disabled = False
-            self.next_button.disabled = (self.current_page == self.total_pages)
-            await self.update_embed(interaction)
-        else:
-            await interaction.response.defer()
-
-@bot.event
-async def on_ready():
-    global bot_start_time
-    print(f'{bot.user} has connected to Discord!')
-    logging.info(f'{bot.user} has connected to Discord!')
-    bot_start_time = time.time()  # Ghi lại thời gian khởi động
-    try:
-        print("Attempting to connect to Lavalink node...")
-        logging.info("Attempting to connect to Lavalink node...")
-        await wavelink.Pool.connect(
-            client=bot,
-            nodes=[wavelink.Node(
-                uri='wss://lava-all.ajieblogs.eu.org:443',
-                password='https://dsc.gg/ajidevserver'
-            )]
-        )
-        print("Connected to Lavalink node")
-        logging.info("Connected to Lavalink node")
-        await sync_commands()
-    except Exception as e:
-        print(f"Failed to connect to Lavalink: {e}")
-        logging.error(f"Failed to connect to Lavalink: {e}")
-    await update_bot_status()
-    threading.Thread(target=start_http_server, daemon=True).start()
-    asyncio.create_task(restart_bot_after_timeout())
-
-@bot.event
-async def on_wavelink_node_ready(payload: wavelink.NodeReadyEventPayload):
-    print(f"Lavalink node ready! Node: {payload.node.uri}, Connected: {payload.node.is_connected()}")
-    logging.info(f"Lavalink node ready! Node: {payload.node.uri}, Connected: {payload.node.is_connected()}")
-
-@bot.event
-async def on_wavelink_node_disconnect(payload: wavelink.NodeDisconnectEventPayload):
-    print(f"Lavalink node disconnected! Node: {payload.node.uri}, Reason: {payload.reason}")
-    logging.error(f"Lavalink node disconnected! Node: {payload.node.uri}, Reason: {payload.reason}")
-
-@bot.event
-async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
-    global current_playing_message, is_skipping, auto_disconnect_task
-    print(f"Track ended: {payload.reason}")
-    logging.info(f"Track ended: {payload.reason}")
-    player = payload.player
-    channel = getattr(player, 'text_channel', None)
-    guild_id = player.guild.id
-    current_playing_message = None
-    player_id = id(player)
-    current_track = loop_track.get(player_id)
-
-    if current_track and player_id in loop_count and loop_count[player_id] > 0 and loop_active.get(player_id, False):
-        loop_count[player_id] -= 1
-        try:
-            await player.play(current_track)
-            print(f"Replaying track: {current_track.title} (Remaining loops: {loop_count[player_id]})")
-            logging.info(f"Replaying track: {current_track.title} (Remaining loops: {loop_count[player_id]})")
-            await update_bot_status(guild_id, player)
-        except Exception as e:
-            print(f"Error replaying track: {e}")
-            logging.error(f"Error replaying track: {e}")
-        return
-    elif player_id in loop_count and loop_count[player_id] == 0:
-        del loop_count[player_id]
-        del loop_active[player_id]
-        del loop_track[player_id]
-        if channel:
-            await channel.send("Loop ended", delete_after=5)
-        return
-
-    if channel and song_queue and not loop_active.get(player_id, False) and not is_skipping:
-        await play_next(channel)
-    elif channel and not song_queue:
-        if guild_id not in auto_disconnect_task:
-            auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
-        await update_bot_status(guild_id)
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    global auto_disconnect_task
-    if member.bot or not before.channel:
-        return
-    guild_id = member.guild.id
-    player = member.guild.voice_client
-    if not player:
-        return
-    if len([m for m in before.channel.members if not m.bot]) == 0:
-        if guild_id not in auto_disconnect_task:
-            auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
-    elif guild_id in auto_disconnect_task:
-        auto_disconnect_task[guild_id].cancel()
-        del auto_disconnect_task[guild_id]
-        print(f"Cancelled auto-disconnect for guild {guild_id}, users rejoined")
-        logging.info(f"Cancelled auto-disconnect for guild {guild_id}, users rejoined")
-
-async def play_next(channel):
-    global current_playing_message, saved_volumes, is_skipping, auto_disconnect_task
-    print(f"Attempting play_next, Is Skipping: {is_skipping}")
-    logging.info(f"Attempting play_next, Is Skipping: {is_skipping}")
-    if not channel.guild.voice_client:
-        print("No voice client found in play_next")
-        logging.info("No voice client found in play_next")
-        is_skipping = False
-        return
-    if is_skipping:
-        print("Skipping play_next due to ongoing skip")
-        logging.info("Skipping play_next due to ongoing skip")
-        is_skipping = False
-        return
-    is_skipping = True
-    for attempt in range(5):
-        try:
-            if song_queue:
-                track = song_queue.popleft()
-                player = channel.guild.voice_client
-                guild_id = channel.guild.id
-                volume = saved_volumes.get(guild_id, 50)
-                await player.set_volume(volume)
-                await player.play(track)
-                embed = discord.Embed(
-                    title="Now Playing", 
-                    description=f"**[{track.title}]({track.uri})**", 
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Source", value=track.source, inline=True)
-                embed.add_field(name="Volume", value=f"{volume}%", inline=True)
-                embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
-                if hasattr(track, 'author'):
-                    embed.add_field(name="Artist", value=track.author, inline=True)
-                if hasattr(track, 'thumbnail'):
-                    embed.set_thumbnail(url=track.thumbnail)
-                message = await channel.send(embed=embed, view=MusicButtons())
-                current_playing_message = message.id
-                print(f"Playing track: {track.title} from {track.source}")
-                logging.info(f"Playing track: {track.title} from {track.source}")
-                await update_bot_status(channel.guild.id, player)
-                if channel.guild.id in auto_disconnect_task:
-                    auto_disconnect_task[channel.guild.id].cancel()
-                    del auto_disconnect_task[channel.guild.id]
-            else:
-                if channel.guild.id not in auto_disconnect_task:
-                    auto_disconnect_task[channel.guild.id] = asyncio.create_task(auto_disconnect(channel.guild.id, channel.guild.voice_client))
-                await update_bot_status(channel.guild.id)
-            break
-        except discord.HTTPException as e:
-            if e.status == 429:
-                print(f"Rate limited in play_next (attempt {attempt + 1}/5). Retrying in 5 seconds...")
-                logging.warning(f"Rate limited in play_next (attempt {attempt + 1}/5).")
-                await asyncio.sleep(5)
-            else:
-                embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
-                await channel.send(embed=embed)
-                print(f"Error playing track: {e}")
-                logging.error(f"Error playing track: {e}")
-                break
-        except Exception as e:
-            embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
-            await channel.send(embed=embed)
-            print(f"Error playing track: {e}")
-            logging.error(f"Error playing track: {e}")
-            break
-    is_skipping = False
-
-@bot.tree.command(name="ping", description="Check bot's latency and Lavalink connection status")
-async def ping_slash(interaction: discord.Interaction):
-    latency = round(bot.latency * 1000)  # Convert to milliseconds
-    lavalink_status = "Connected" if wavelink.Pool.nodes else "Not connected"
-    embed = discord.Embed(
-        title="Pong!",
-        description=f"**Latency**: {latency} ms\n**Lavalink Status**: {lavalink_status}",
-        color=discord.Color.blue()
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-    print(f"Ping command executed: Latency {latency} ms, Lavalink {lavalink_status}")
-    logging.info(f"Ping command executed: Latency {latency} ms, Lavalink {lavalink_status}")
-
-@bot.tree.command(name="play", description="Play a song or playlist by URL or search by name (e.g., 'never gonna give you up')")
+                title="Error", description interna: discord.Interaction
 async def play_slash(interaction: discord.Interaction, query: str):
     global current_playing_message, saved_volumes, auto_disconnect_task
     print(f"Received /play command with query: {query}")
@@ -566,7 +346,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
             try:
                 # Kiểm tra nếu query là URL
                 if query.startswith(('http://', 'https://')):
-                    tracks = await wavelink.Playable.search(query)
+                    tracks = await wavelink.Player.search(query)
                     if not tracks:
                         embed = discord.Embed(
                             title="Error", description="No song or playlist found from the link!", color=discord.Color.red()
@@ -581,7 +361,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
                             song_queue.append(track)
                         embed = discord.Embed(
                             title="Added Playlist",
-                            description=f"Added {len(tracks.tracks)} tracks from playlist '{tracks.name}' to the queue",
+                            description=f"Added {len(tracks.tracks)} tracks from playlist to the queue",
                             color=discord.Color.blue()
                         )
                         if not player.playing and song_queue:
@@ -654,16 +434,23 @@ async def play_slash(interaction: discord.Interaction, query: str):
                             await update_bot_status()
                 else:
                     # Tìm kiếm trên các nền tảng (YouTube, Spotify, SoundCloud)
-                    sources = ['youtube', 'spotify', 'soundcloud']
                     all_tracks = []
-                    for source in sources:
-                        try:
-                            tracks = await wavelink.Playable.search(query, source=source)
-                            if tracks:
-                                all_tracks.extend([(track, source) for track in tracks[:10]])  # Giới hạn 10 bài mỗi nền tảng
-                        except Exception as e:
-                            print(f"Error searching on {source}: {e}")
-                            logging.error(f"Error searching on {source}: {e}")
+                    try:
+                        # Tìm kiếm trên YouTube
+                        youtube_tracks = await wavelink.YouTubeTrack.search(query=query, return_first_result=False)
+                        if youtube_tracks:
+                            all_tracks.extend([(track, "youtube") for track in youtube_tracks[:10]])  # Giới hạn 10 bài
+                        # Tìm kiếm trên Spotify (nếu được hỗ trợ bởi nút Lavalink)
+                        spotify_tracks = await wavelink.SpotifyTrack.search(query=query, return_first_result=False)
+                        if spotify_tracks:
+                            all_tracks.extend([(track, "spotify") for track in spotify_tracks[:10]])
+                        # Tìm kiếm trên SoundCloud
+                        soundcloud_tracks = await wavelink.SoundCloudTrack.search(query=query, return_first_result=False)
+                        if soundcloud_tracks:
+                            all_tracks.extend([(track, "soundcloud") for track in soundcloud_tracks[:10]])
+                    except Exception as e:
+                        print(f"Error searching: {e}")
+                        logging.error(f"Error searching: {e}")
 
                     if not all_tracks:
                         embed = discord.Embed(
