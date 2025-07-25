@@ -226,7 +226,6 @@ class MusicButtons(discord.ui.View):
         if is_skipping:
             await interaction.response.defer()
             return
-        await interaction.response.defer()
         is_skipping = True
         try:
             player = interaction.guild.voice_client
@@ -238,7 +237,7 @@ class MusicButtons(discord.ui.View):
                 del loop_active[player_id]
             if player_id in loop_track:
                 del loop_track[player_id]
-            await play_next(interaction.channel)
+            await play_next(interaction.channel, amount=1)
             message = await interaction.followup.send("Skipped the current track.", ephemeral=True)
             await asyncio.sleep(5)
             await message.delete()
@@ -469,12 +468,27 @@ async def on_voice_state_update(member, before, after):
         auto_disconnect_task[guild_id].cancel()
         del auto_disconnect_task[guild_id]
 
-async def play_next(channel):
+async def play_next(channel, amount=1):
     global current_playing_message, saved_volumes, auto_disconnect_task
     if not channel.guild or not channel.guild.voice_client:
         return
     for attempt in range(5):
         try:
+            # Skip the specified number of tracks
+            if len(song_queue) < amount:
+                embed = discord.Embed(
+                    title="Error",
+                    description=f"Not enough tracks in queue to skip {amount}. Only {len(song_queue)} track(s) available.",
+                    color=discord.Color.red()
+                )
+                message = await channel.send(embed=embed)
+                await asyncio.sleep(5)
+                await message.delete()
+                return
+            for _ in range(amount):
+                if song_queue:
+                    song_queue.popleft()
+            
             if song_queue:
                 track = song_queue.popleft()
                 player = channel.guild.voice_client
@@ -829,12 +843,16 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
     await update_bot_status(interaction.guild.id, player)
     save_volumes()
 
-@bot.tree.command(name="skip", description="Skip the current song")
-async def skip_slash(interaction: discord.Interaction):
+@bot.tree.command(name="skip", description="Skip the current song or a specified number of songs")
+async def skip_slash(interaction: discord.Interaction, amount: int = 1):
     global is_skipping
     if not interaction.guild or not interaction.guild.voice_client:
         await interaction.response.send_message(embed=discord.Embed(
             title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        return
+    if amount < 1:
+        await interaction.response.send_message(embed=discord.Embed(
+            title="Error", description="Skip amount must be at least 1!", color=discord.Color.red()), ephemeral=True)
         return
     if is_skipping:
         await interaction.response.send_message("Cannot skip right now.", ephemeral=True)
@@ -851,8 +869,8 @@ async def skip_slash(interaction: discord.Interaction):
             del loop_active[player_id]
         if player_id in loop_track:
             del loop_track[player_id]
-        await play_next(interaction.channel)
-        message = await interaction.followup.send("Skipped the current track.", ephemeral=True)
+        await play_next(interaction.channel, amount=amount)
+        message = await interaction.followup.send(f"Skipped {amount} track(s).", ephemeral=True)
         await asyncio.sleep(5)
         await message.delete()
     except Exception as e:
