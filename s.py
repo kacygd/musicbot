@@ -106,7 +106,6 @@ async def restart_bot_after_timeout():
             logging.info("Bot has been running for 4 hours. Initiating restart...")
             print("Bot has been running for 4 hours. Initiating restart...")
             try:
-                # Đóng kết nối Discord và Lavalink
                 for guild in bot.guilds:
                     if guild.voice_client:
                         await guild.voice_client.disconnect()
@@ -116,7 +115,6 @@ async def restart_bot_after_timeout():
             except Exception as e:
                 logging.error(f"Error closing bot connections: {e}")
                 print(f"Error closing bot connections: {e}")
-            # Khởi động lại chương trình
             os.execv(sys.executable, ['python'] + sys.argv)
         await asyncio.sleep(60)  # Kiểm tra mỗi 60 giây
 
@@ -358,7 +356,6 @@ async def on_ready():
         logging.error(f"Failed to connect to Lavalink: {e}")
     await update_bot_status()
     threading.Thread(target=start_http_server, daemon=True).start()
-    # Bắt đầu tác vụ kiểm tra thời gian để khởi động lại
     asyncio.create_task(restart_bot_after_timeout())
 
 @bot.event
@@ -495,7 +492,20 @@ async def play_next(channel):
             break
     is_skipping = False
 
-@bot.tree.command(name="play", description="Play a song or playlist from any source (YouTube, Spotify, SoundCloud, etc.)")
+@bot.tree.command(name="ping", description="Check bot's latency and Lavalink connection status")
+async def ping_slash(interaction: discord.Interaction):
+    latency = round(bot.latency * 1000)  # Convert to milliseconds
+    lavalink_status = "Connected" if wavelink.Pool.nodes else "Not connected"
+    embed = discord.Embed(
+        title="Pong!",
+        description=f"**Latency**: {latency} ms\n**Lavalink Status**: {lavalink_status}",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    print(f"Ping command executed: Latency {latency} ms, Lavalink {lavalink_status}")
+    logging.info(f"Ping command executed: Latency {latency} ms, Lavalink {lavalink_status}")
+
+@bot.tree.command(name="play", description="Play a song or playlist by URL or search by name (e.g., 'never gonna give you up')")
 async def play_slash(interaction: discord.Interaction, query: str):
     global current_playing_message, saved_volumes, auto_disconnect_task
     print(f"Received /play command with query: {query}")
@@ -554,6 +564,7 @@ async def play_slash(interaction: discord.Interaction, query: str):
     async with interaction.channel.typing():
         for attempt in range(5):
             try:
+                # Kiểm tra nếu query là URL
                 if query.startswith(('http://', 'https://')):
                     tracks = await wavelink.Playable.search(query)
                     if not tracks:
@@ -642,32 +653,30 @@ async def play_slash(interaction: discord.Interaction, query: str):
                             logging.info(f"Added to queue: {track.title} from {track.source}")
                             await update_bot_status()
                 else:
+                    # Tìm kiếm trên các nền tảng (YouTube, Spotify, SoundCloud)
                     sources = ['youtube', 'spotify', 'soundcloud']
-                    source = None
-                    for s in sources:
-                        if s in query.lower():
-                            source = s
-                            query = query.lower().replace(s, '').strip()
-                            break
-                    if not source:
-                        embed = discord.Embed(
-                            title="Error", description="Please specify a source (e.g., 'song name youtube' or 'song name spotify')!", color=discord.Color.red()
-                        )
-                        await interaction.followup.send(embed=embed, ephemeral=True)
-                        print("No source specified for name search")
-                        logging.info("No source specified for name search")
-                        return
+                    all_tracks = []
+                    for source in sources:
+                        try:
+                            tracks = await wavelink.Playable.search(query, source=source)
+                            if tracks:
+                                all_tracks.extend([(track, source) for track in tracks[:10]])  # Giới hạn 10 bài mỗi nền tảng
+                        except Exception as e:
+                            print(f"Error searching on {source}: {e}")
+                            logging.error(f"Error searching on {source}: {e}")
 
-                    tracks = await wavelink.Playable.search(query, source=source)
-                    if not tracks:
+                    if not all_tracks:
                         embed = discord.Embed(
-                            title="Error", description=f"No results found on {source}!", color=discord.Color.red()
+                            title="Error", description=f"No results found for '{query}' on any platform!", color=discord.Color.red()
                         )
                         await interaction.followup.send(embed=embed)
-                        print(f"No results found on {source}")
-                        logging.info(f"No results found on {source}")
+                        print(f"No results found for '{query}'")
+                        logging.info(f"No results found for '{query}'")
                         return
 
+                    # Lấy tối đa 10 bài từ tất cả nền tảng
+                    all_tracks = all_tracks[:10]
+                    # Tạo view để chọn bài hát
                     class TrackSelection(discord.ui.View):
                         def __init__(self, tracks, interaction):
                             super().__init__(timeout=60)
@@ -676,10 +685,10 @@ async def play_slash(interaction: discord.Interaction, query: str):
                             self.add_items()
 
                         def add_items(self):
-                            for i, track in enumerate(self.tracks[:5]):
-                                button = discord.ui.Button(label=f"{i + 1}. {track.title[:50]}...", style=discord.ButtonStyle.primary)
+                            for i, (track, source) in enumerate(self.tracks):
+                                button = discord.ui.Button(label=f"{i + 1}. {track.title[:50]}... ({source.capitalize()})", style=discord.ButtonStyle.primary)
                                 async def callback(interaction):
-                                    selected_track = self.tracks[i]
+                                    selected_track = self.tracks[i][0]
                                     song_queue.append(selected_track)
                                     if not player.playing:
                                         selected_track = song_queue.popleft()
@@ -722,15 +731,22 @@ async def play_slash(interaction: discord.Interaction, query: str):
                                 button.callback = callback
                                 self.add_item(button)
 
+                    # Hiển thị kết quả tìm kiếm
                     embed = discord.Embed(
                         title="Search Results",
-                        description=f"Found tracks on {source}. Select a track by clicking a button below:",
+                        description=f"Found tracks for '{query}'. Select a track by clicking a button below:",
                         color=discord.Color.blue()
                     )
-                    view = TrackSelection(tracks, interaction)
+                    for i, (track, source) in enumerate(all_tracks, 1):
+                        embed.add_field(
+                            name=f"{i}. {track.title}",
+                            value=f"Source: {source.capitalize()} | Duration: {format_duration(track.length)}",
+                            inline=False
+                        )
+                    view = TrackSelection(all_tracks, interaction)
                     await interaction.followup.send(embed=embed, view=view)
-                    print(f"Displayed {len(tracks)} search results on {source}")
-                    logging.info(f"Displayed {len(tracks)} search results on {source}")
+                    print(f"Displayed {len(all_tracks)} search results for '{query}'")
+                    logging.info(f"Displayed {len(all_tracks)} search results for '{query}'")
 
                 break
             except discord.HTTPException as e:
