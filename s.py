@@ -28,7 +28,7 @@ loop_track = {}
 auto_disconnect_task = {}
 bot_start_time = time.time()
 skip_locks = {}  # Per-guild locks for skipping
-is_skipping = False  # Flag to prevent multiple skip triggers
+last_play_time = {}  # Track last play time per guild to debounce rapid skips
 
 HTML_CONTENT = """Bot is Alive"""
 
@@ -219,7 +219,7 @@ class MusicButtons(discord.ui.View):
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.danger, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global current_playing_message, is_skipping
+        global current_playing_message
         if not interaction.guild or not interaction.guild.voice_client:
             await interaction.response.send_message(embed=discord.Embed(
                 title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
@@ -230,7 +230,6 @@ class MusicButtons(discord.ui.View):
             return
         skip_locks[guild_id] = asyncio.Lock()
         async with skip_locks[guild_id]:
-            is_skipping = True
             try:
                 player = interaction.guild.voice_client
                 player_id = id(player)
@@ -242,7 +241,7 @@ class MusicButtons(discord.ui.View):
                     del loop_active[player_id]
                 if player_id in loop_track:
                     del loop_track[player_id]
-                await play_next(interaction.channel)
+                await play_next(interaction.channel, is_user_skip=True)
                 await interaction.response.send_message("Skipped the current track.", ephemeral=True)
                 await asyncio.sleep(5)
                 await interaction.delete_original_response()
@@ -250,8 +249,6 @@ class MusicButtons(discord.ui.View):
                 with open('bot.log', 'a') as f:
                     f.write(f"{time.ctime()}: Error in skip_button: {e}\n")
                 await interaction.response.send_message(f"Error skipping track: {e}", ephemeral=True)
-            finally:
-                is_skipping = False
         await update_bot_status(interaction.guild.id)
 
     @discord.ui.button(label="Volume Up", style=discord.ButtonStyle.secondary, emoji="🔊")
@@ -430,12 +427,22 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
     current_playing_message = None
     player_id = id(player)
     current_track = loop_track.get(player_id)
+    reason = payload.reason
+
+    with open('bot.log', 'a') as f:
+        f.write(f"{time.ctime()}: Track ended for guild {guild_id}, reason: {reason}, queue length: {len(song_queue)}\n")
+
+    if reason == "STOPPED" and not loop_active.get(player_id, False):
+        # Track was stopped (e.g., by skip), let the skip handler deal with it
+        return
 
     if current_track and player_id in loop_count and loop_count[player_id] > 0 and loop_active.get(player_id, False):
         loop_count[player_id] -= 1
         try:
             await player.play(current_track)
             await update_bot_status(guild_id, player)
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Replaying looped track for guild {guild_id}\n")
         except Exception as e:
             with open('bot.log', 'a') as f:
                 f.write(f"{time.ctime()}: Error replaying track: {e}\n")
@@ -450,42 +457,38 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
             await message.delete()
         return
 
-    if channel and song_queue:
-        with open('bot.log', 'a') as f:
-            f.write(f"{time.ctime()}: Playing next track from on_wavelink_track_end for guild {guild_id}, queue length: {len(song_queue)}\n")
-        await play_next(channel)
+    if channel and song_queue and reason in ["FINISHED", "LOAD_FAILED"]:
+        await play_next(channel, is_user_skip=False)
     elif channel and not song_queue:
         if guild_id not in auto_disconnect_task:
             auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
         await update_bot_status(guild_id)
 
-@bot.event
-async def on_voice_state_update(member, before, after):
-    global auto_disconnect_task
-    if member.bot or not before.channel:
-        return
-    guild_id = member.guild.id
-    player = member.guild.voice_client
-    if not player:
-        return
-    if len([m for m in before.channel.members if not m.bot]) == 0:
-        if guild_id not in auto_disconnect_task:
-            auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, player))
-    elif guild_id in auto_disconnect_task:
-        auto_disconnect_task[guild_id].cancel()
-        del auto_disconnect_task[guild_id]
-
-async def play_next(channel):
-    global current_playing_message, saved_volumes, is_skipping, auto_disconnect_task
+async def play_next(channel, is_user_skip=False):
+    global current_playing_message, saved_volumes, auto_disconnect_task
     if not channel.guild or not channel.guild.voice_client:
-        is_skipping = False
         return
-    for attempt in range(5):
+
+    guild_id = channel.guild.id
+    current_time = time.time()
+    last_play = last_play_time.get(guild_id, 0)
+    if current_time - last_play < 2 and not is_user_skip:  # Debounce non-user skips
+        with open('bot.log', 'a') as f:
+            f.write(f"{time.ctime()}: Debouncing play_next for guild {guild_id}, queue length: {len(song_queue)}\n")
+        await asyncio.sleep(2)
+        return
+
+    last_play_time[guild_id] = current_time
+    player = channel.guild.voice_client
+
+    for attempt in range(3):
         try:
             if song_queue:
                 track = song_queue.popleft()
-                player = channel.guild.voice_client
-                guild_id = channel.guild.id
+                if not hasattr(track, 'title') or not track.uri:
+                    with open('bot.log', 'a') as f:
+                        f.write(f"{time.ctime()}: Invalid track skipped for guild {guild_id}\n")
+                    continue
                 volume = saved_volumes.get(guild_id, 50)
                 await player.set_volume(volume)
                 await player.play(track)
@@ -509,31 +512,45 @@ async def play_next(channel):
                 if channel.guild.id in auto_disconnect_task:
                     auto_disconnect_task[channel.guild.id].cancel()
                     del auto_disconnect_task[channel.guild.id]
+                with open('bot.log', 'a') as f:
+                    f.write(f"{time.ctime()}: Playing track '{track.title}' for guild {guild_id}, queue length: {len(song_queue)}\n")
             else:
                 if channel.guild.id not in auto_disconnect_task:
-                    auto_disconnect_task[channel.guild.id] = asyncio.create_task(auto_disconnect(channel.guild.id, channel.guild.voice_client))
+                    auto_disconnect_task[channel.guild.id] = asyncio.create_task(auto_disconnect(channel.guild.id, player))
                 await update_bot_status(channel.guild.id)
             break
         except discord.HTTPException as e:
             if e.status == 429:
                 await asyncio.sleep(5 * (attempt + 1))
+                with open('bot.log', 'a') as f:
+                    f.write(f"{time.ctime()}: Rate limit in play_next for guild {guild_id}, retrying after {5 * (attempt + 1)}s\n")
             else:
                 embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
                 message = await channel.send(embed=embed)
                 await asyncio.sleep(5)
                 await message.delete()
                 with open('bot.log', 'a') as f:
-                    f.write(f"{time.ctime()}: Error playing track: {e}\n")
+                    f.write(f"{time.ctime()}: HTTP error in play_next for guild {guild_id}: {e}\n")
                 break
-        except Exception as e:
-            embed = discord.Embed(title="Error", description=f"Error playing track: {e}", color=discord.Color.red())
+        except wavelink.errors.LavalinkException as e:
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Lavalink error in play_next for guild {guild_id}: {e}\n")
+            if attempt < 2:
+                await asyncio.sleep(2)
+                continue
+            embed = discord.Embed(title="Error", description=f"Failed to play track: {e}", color=discord.Color.red())
             message = await channel.send(embed=embed)
             await asyncio.sleep(5)
             await message.delete()
-            with open('bot.log', 'a') as f:
-                f.write(f"{time.ctime()}: Error playing track: {e}\n")
             break
-    is_skipping = False
+        except Exception as e:
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Unexpected error in play_next for guild {guild_id}: {e}\n")
+            embed = discord.Embed(title="Error", description=f"Unexpected error: {e}", color=discord.Color.red())
+            message = await channel.send(embed=embed)
+            await asyncio.sleep(5)
+            await message.delete()
+            break
 
 @bot.tree.command(name="ping", description="Check bot's latency")
 async def ping_slash(interaction: discord.Interaction):
@@ -839,7 +856,7 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
 
 @bot.tree.command(name="skip", description="Skip the current song")
 async def skip_slash(interaction: discord.Interaction):
-    global current_playing_message, is_skipping, auto_disconnect_task
+    global current_playing_message, auto_disconnect_task
     if not interaction.guild or not interaction.guild.voice_client:
         await interaction.response.send_message(embed=discord.Embed(
             title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
@@ -850,7 +867,6 @@ async def skip_slash(interaction: discord.Interaction):
         return
     skip_locks[guild_id] = asyncio.Lock()
     async with skip_locks[guild_id]:
-        is_skipping = True
         try:
             player = interaction.guild.voice_client
             player_id = id(player)
@@ -862,7 +878,7 @@ async def skip_slash(interaction: discord.Interaction):
                 del loop_active[player_id]
             if player_id in loop_track:
                 del loop_track[player_id]
-            await play_next(interaction.channel)
+            await play_next(interaction.channel, is_user_skip=True)
             message = await interaction.response.send_message("Skipped the current track.", ephemeral=True)
             await asyncio.sleep(5)
             await message.delete()
@@ -870,8 +886,6 @@ async def skip_slash(interaction: discord.Interaction):
             with open('bot.log', 'a') as f:
                 f.write(f"{time.ctime()}: Error in skip_slash: {e}\n")
             await interaction.response.send_message(f"Error skipping track: {e}", ephemeral=True)
-        finally:
-            is_skipping = False
         await update_bot_status(interaction.guild.id)
 
 @bot.tree.command(name="stop", description="Stop music and clear the queue")
@@ -959,12 +973,12 @@ async def queue_slash(interaction: discord.Interaction):
 @bot.tree.command(name="help", description="Display the list of commands")
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(title="Music Bot Commands", color=discord.Color.blue())
-    for command in bot.tree.get_commands():
-        embed.add_field(name=f"/{command.name}", value=command.description, inline=False)
+    for command in sorted(bot.tree.get_commands(), key=lambda x: x.name):
+        embed.add_field(name=f"/{x.name}", value=x.description, inline=False)
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="loop", description="Loop the current track (no number: infinite, number: loop count)")
-async def loop_slash(interaction: discord.Interaction, times: str = None):
+async def loop_slash(interaction: discord.Interaction, times: int = None):
     if not interaction.guild or not interaction.guild.voice_client or not interaction.guild.voice_client.playing:
         embed = discord.Embed(
             title="Error", description="No track is currently playing!", color=discord.Color.red()
@@ -989,7 +1003,6 @@ async def loop_slash(interaction: discord.Interaction, times: str = None):
         )
     else:
         try:
-            times = int(times)
             if times < 0:
                 embed = discord.Embed(
                     title="Error", description="Loop count must be 0 or greater!", color=discord.Color.red()
@@ -1014,13 +1027,16 @@ async def loop_slash(interaction: discord.Interaction, times: str = None):
 def is_already_running():
     current_pid = os.getpid()
     for proc in psutil.process_iter(['pid', 'name']):
-        if proc.name() == 'python3' and proc.pid != current_pid:
-            with open('bot.pid', 'w') as f:
-                f.write(str(current_pid))
-            return True
+        try:
+            if proc.name() == 'python3' and proc.pid != current_pid:
+                with open('bot.pid', 'w') as f:
+                    f.write(str(current_pid))
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
     return False
 
-async def login_with_retry(client, token, max_retries=5, delay=5):
+async def login_with_retry(client, token, max_retries=5, delay=10):
     for attempt in range(max_retries):
         try:
             await client.login(token)
@@ -1031,12 +1047,25 @@ async def login_with_retry(client, token, max_retries=5, delay=5):
                 delay *= 2
             else:
                 raise e
+        except Exception as e:
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Login attempt {attempt + 1} failed: {e}\n")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+            else:
+                raise e
     raise Exception("Failed to login after maximum retries")
 
 if __name__ == "__main__":
     load_dotenv()
     TOKEN = os.getenv('DISCORD_TOKEN')
+    if not TOKEN:
+        with open('bot.log', 'a') as f:
+            f.write(f"{time.ctime()}: DISCORD_TOKEN not found in environment variables\n")
+        exit(1)
     if is_already_running():
+        with open('bot.log', 'a') as f:
+            f.write(f"{time.ctime()}: Another instance of the bot is already running\n")
         exit(1)
     async def start_bot():
         await login_with_retry(bot, TOKEN)
