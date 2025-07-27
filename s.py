@@ -89,8 +89,6 @@ async def restart_bot(channel=None):
         )
         try:
             message = await channel.send(embed=embed)
-            await asyncio.sleep(5)  # Wait 5 seconds to let the user see the message
-            await message.delete()  # Delete the message after displaying
         except Exception as e:
             with open('bot.log', 'a') as f:
                 f.write(f"{time.ctime()}: Error sending timeout embed: {e}\n")
@@ -107,8 +105,8 @@ async def restart_bot(channel=None):
 async def auto_disconnect(guild_id, player):
     global song_queue, current_playing_message
     start_time = time.time()
-    INACTIVE_TIMEOUT = 300  # 5 minutes for no music
-    EMPTY_VC_TIMEOUT = 180  # 3 minutes for empty VC
+    INACTIVE_TIMEOUT = 300  # 5 minutes
+    EMPTY_VC_TIMEOUT = 300 
 
     while True:
         if not player or not player.channel:
@@ -124,13 +122,11 @@ async def auto_disconnect(guild_id, player):
                     await player.disconnect()
                     embed = discord.Embed(
                         title="Disconnected",
-                        description="Left voice channel due to no users after 3 minutes.",
+                        description="Left voice channel due to no users.",
                         color=discord.Color.blue()
                     )
                     if player.text_channel:
                         message = await player.text_channel.send(embed=embed)
-                        await asyncio.sleep(5)
-                        await message.delete()
                 except Exception as e:
                     with open('bot.log', 'a') as f:
                         f.write(f"{time.ctime()}: Error disconnecting from empty VC: {e}\n")
@@ -143,19 +139,17 @@ async def auto_disconnect(guild_id, player):
                 await player.disconnect()
                 embed = discord.Embed(
                     title="Disconnected",
-                    description="Left voice channel due to no music playing for 5 minutes.",
+                    description="Left voice channel due to no music playing.",
                     color=discord.Color.blue()
                 )
                 if player.text_channel:
                     message = await player.text_channel.send(embed=embed)
-                    await asyncio.sleep(5)
-                    await message.delete()
             except Exception as e:
                 with open('bot.log', 'a') as f:
                     f.write(f"{time.ctime()}: Error disconnecting from inactive VC: {e}\n")
             await update_bot_status(guild_id)
             break
-        await asyncio.sleep(10)  # Check every 10 seconds
+        await asyncio.sleep(300)
 
     if guild_id in auto_disconnect_task:
         del auto_disconnect_task[guild_id]
@@ -372,8 +366,6 @@ class MusicButtons(discord.ui.View):
             embed = discord.Embed(
                 title="Stopped", description="Stopped music and cleared the queue.", color=discord.Color.blue())
             message = await interaction.response.send_message(embed=embed)
-            await asyncio.sleep(5)
-            await message.delete()
             if guild_id not in auto_disconnect_task:
                 auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, interaction.guild.voice_client))
             await update_bot_status(guild_id)
@@ -479,8 +471,6 @@ async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
         del loop_track[player_id]
         if channel:
             message = await channel.send("Loop ended")
-            await asyncio.sleep(5)
-            await message.delete()
         return
 
     if channel and song_queue and reason in ["FINISHED", "LOAD_FAILED"]:
@@ -947,8 +937,6 @@ async def stop_slash(interaction: discord.Interaction):
             title="Stopped", description="Stopped music and cleared the queue.", color=discord.Color.blue()
         )
         message = await interaction.response.send_message(embed=embed)
-        await asyncio.sleep(5)
-        await message.delete()
         if guild_id not in auto_disconnect_task:
             auto_disconnect_task[guild_id] = asyncio.create_task(auto_disconnect(guild_id, interaction.guild.voice_client))
         await update_bot_status(guild_id)
@@ -976,8 +964,6 @@ async def leave_slash(interaction: discord.Interaction):
         current_playing_message = None
         embed = discord.Embed(title="Disconnected", description="Left the voice channel.", color=discord.Color.blue())
         message = await interaction.response.send_message(embed=embed)
-        await asyncio.sleep(5)
-        await message.delete()
         await update_bot_status(guild_id)
     else:
         await interaction.response.send_message(embed=discord.Embed(
