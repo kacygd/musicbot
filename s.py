@@ -81,6 +81,19 @@ def load_volumes():
 
 async def restart_bot(channel=None):
     save_volumes()
+    if channel:
+        embed = discord.Embed(
+            title="Bot Timeout",
+            description="The bot has encountered a timeout error and will restart. Please try your command again in a few seconds.",
+            color=discord.Color.red()
+        )
+        try:
+            message = await channel.send(embed=embed)
+            await asyncio.sleep(5)  # Wait 5 seconds to let the user see the message
+            await message.delete()  # Delete the message after displaying
+        except Exception as e:
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Error sending timeout embed: {e}\n")
     try:
         for guild in bot.guilds:
             if guild.voice_client:
@@ -89,17 +102,6 @@ async def restart_bot(channel=None):
     except Exception as e:
         with open('bot.log', 'a') as f:
             f.write(f"{time.ctime()}: Error during bot shutdown: {e}\n")
-    if channel:
-        embed = discord.Embed(
-            title="Connection Error",
-            description="Failed to connect to voice channel. Bot is restarting. Please try again after a moment.",
-            color=discord.Color.red()
-        )
-        try:
-            await channel.send(embed=embed)
-        except Exception as e:
-            with open('bot.log', 'a') as f:
-                f.write(f"{time.ctime()}: Error sending restart embed: {e}\n")
     os.execv(sys.executable, ['python'] + sys.argv)
 
 async def auto_disconnect(guild_id, player):
@@ -576,7 +578,7 @@ async def play_next(channel, is_user_skip=False):
             if attempt < 2:
                 await asyncio.sleep(2)
                 continue
-            embed = discord.Embed(title="Error", description=f"Failed to play track: {e}"", color=discord.Color.red())
+            embed = discord.Embed(title="Error", description=f"Failed to play track: {e}", color=discord.Color.red())
             message = await channel.send(embed=embed)
             await asyncio.sleep(5)
             await message.delete()
@@ -791,54 +793,54 @@ async def pause_slash(interaction: discord.Interaction):
         await interaction.delete_original_response()
         await update_bot_status(interaction.guild.id)
 
-    @bot.tree.command(name="resume", description="Resume the current track")
-    async def resume_slash(interaction: discord.Interaction):
-        global current_playing_message
-        if not interaction.guild or not interaction.guild.voice_client:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
-            return
-        player = interaction.guild.voice_client
-        if not player.paused:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Error", description="Track is not paused!", color=discord.Color.red()), ephemeral=True)
-            return
-        await player.resume()
-        if current_playing_message:
-            try:
-                message = await interaction.channel.fetch_message(current_playing_message)
-                embed = discord.Embed(
-                    title="Now Playing",
-                    description=f"**[{player.current.title}]({player.current.uri})**",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Source", value=player.current.source, inline=True)
-                embed.add_field(name="Volume", value=f"{saved_volumes.get(interaction.guild.id, 50)}%", inline=True)
-                embed.add_field(name="Duration", value=format_duration(player.current.length), inline=True)
-                if hasattr(player.current, 'author'):
-                    embed.add_field(name="Artist", value=player.current.author, inline=True)
-                if hasattr(player.current, 'thumbnail'):
-                    embed.set_thumbnail(url=player.current.thumbnail)
-                await message.edit(embed=embed, view=MusicButtons(player))
-            except:
-                embed = discord.Embed(
-                    title="Now Playing",
-                    description=f"**[{player.current.title}]({player.current.uri})**",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Source", value=player.current.source, inline=True)
-                embed.add_field(name="Volume", value=f"{saved_volumes.get(interaction.guild.id, 50)}%", inline=True)
-                embed.add_field(name="Duration", value=format_duration(player.current.length), inline=True)
-                if hasattr(player.current, 'author'):
-                    embed.add_field(name="Artist", value=player.current.author, inline=True)
-                if hasattr(player.current, 'thumbnail'):
-                    embed.set_thumbnail(url=player.current.thumbnail)
-                message = await interaction.channel.send(embed=embed, view=MusicButtons(player))
-                current_playing_message = message.id
-        await interaction.response.send_message("Resumed the current track.", ephemeral=True)
-        await asyncio.sleep(5)
-        await interaction.delete_original_response()
-        await update_bot_status(interaction.guild.id)
+@bot.tree.command(name="resume", description="Resume the current track")
+async def resume_slash(interaction: discord.Interaction):
+    global current_playing_message
+    if not interaction.guild or not interaction.guild.voice_client:
+        await interaction.response.send_message(embed=discord.Embed(
+            title="Error", description="Bot is not in a voice channel!", color=discord.Color.red()), ephemeral=True)
+        return
+    player = interaction.guild.voice_client
+    if not player.paused:
+        await interaction.response.send_message(embed=discord.Embed(
+            title="Error", description="Track is not paused!", color=discord.Color.red()), ephemeral=True)
+        return
+    await player.resume()
+    if current_playing_message:
+        try:
+            message = await interaction.channel.fetch_message(current_playing_message)
+            embed = discord.Embed(
+                title="Now Playing",
+                description=f"**[{player.current.title}]({player.current.uri})**",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Source", value=player.current.source, inline=True)
+            embed.add_field(name="Volume", value=f"{saved_volumes.get(interaction.guild.id, 50)}%", inline=True)
+            embed.add_field(name="Duration", value=format_duration(player.current.length), inline=True)
+            if hasattr(player.current, 'author'):
+                embed.add_field(name="Artist", value=player.current.author, inline=True)
+            if hasattr(player.current, 'thumbnail'):
+                embed.set_thumbnail(url=player.current.thumbnail)
+            await message.edit(embed=embed, view=MusicButtons(player))
+        except:
+            embed = discord.Embed(
+                title="Now Playing",
+                description=f"**[{player.current.title}]({player.current.uri})**",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Source", value=player.current.source, inline=True)
+            embed.add_field(name="Volume", value=f"{saved_volumes.get(interaction.guild.id, 50)}%", inline=True)
+            embed.add_field(name="Duration", value=format_duration(player.current.length), inline=True)
+            if hasattr(player.current, 'author'):
+                embed.add_field(name="Artist", value=player.current.author, inline=True)
+            if hasattr(player.current, 'thumbnail'):
+                embed.set_thumbnail(url=player.current.thumbnail)
+            message = await interaction.channel.send(embed=embed, view=MusicButtons(player))
+            current_playing_message = message.id
+    await interaction.response.send_message("Resumed the current track.", ephemeral=True)
+    await asyncio.sleep(5)
+    await interaction.delete_original_response()
+    await update_bot_status(interaction.guild.id)
 
 @bot.tree.command(name="volume", description="Set volume (0-100)")
 async def volume_slash(interaction: discord.Interaction, volume: int):
@@ -886,7 +888,7 @@ async def volume_slash(interaction: discord.Interaction, volume: int):
     message = await interaction.followup.send(f"Volume set to {volume}%", ephemeral=True)
     await asyncio.sleep(5)
     await message.delete()
-    await update_bot_status(interaction.guild.id, player))
+    await update_bot_status(interaction.guild.id, player)
     save_volumes()
 
 @bot.tree.command(name="skip", description="Skip the current song")
@@ -1018,7 +1020,7 @@ async def loop_slash(interaction: discord.Interaction, times: int = None):
         embed = discord.Embed(
             title="Error", description="No track is currently playing!", color=discord.Color.red()
         )
-        await interaction.response.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     player = interaction.guild.voice_client
     player_id = id(player)
@@ -1026,6 +1028,7 @@ async def loop_slash(interaction: discord.Interaction, times: int = None):
     if not current_track:
         embed = discord.Embed(
             title="Error", description="Cannot identify the current track!", color=discord.Color.red()
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     if times is None:
@@ -1033,7 +1036,7 @@ async def loop_slash(interaction: discord.Interaction, times: int = None):
         loop_active[player_id] = True
         loop_track[player_id] = current_track
         embed = discord.Embed(
-            title="Loop", description="f"Enabled infinite loop for '[{current_track.title}]({current_track.uri})'.", color=discord.Color.blue()
+            title="Loop", description=f"Enabled infinite loop for '[{current_track.title}]({current_track.uri})'", color=discord.Color.blue()
         )
     else:
         try:
@@ -1047,7 +1050,7 @@ async def loop_slash(interaction: discord.Interaction, times: int = None):
             loop_active[player_id] = True
             loop_track[player_id] = current_track
             embed = discord.Embed(
-                title="Loop", description="f"Enabled loop for '[{current_track.title}]({current_track.uri})' {times} times.", color=discord.Color.green()
+                title="Loop", description=f"Enabled loop for '[{current_track.title}]({current_track.uri})' {times} times.", color=discord.Color.green()
             )
         except ValueError:
             embed = discord.Embed(
@@ -1056,7 +1059,7 @@ async def loop_slash(interaction: discord.Interaction, times: int = None):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
     await interaction.response.send_message(embed=embed)
-    await update_bot_status(interaction.guild.id,guild_id, player)
+    await update_bot_status(interaction.guild.id, player)
 
 def is_already_running():
     try:
@@ -1067,28 +1070,33 @@ def is_already_running():
                     with open('bot.pid', 'w') as f:
                         f.write(str(current_pid))
                     return True
-            except (psutil.NoSuchProcess, psutil.psAccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return False
-    async def login_with_retry(client, token, max_retries=5, delay=5):
-        for attempt in range(max_retries):
-            try:
-                await client.login(token)
-                return
-            except discord.errors.HTTPException as e:
-                if e.status == 429:
-                    await asyncio.sleep(delay)
-                    delay *= 2
-                    continue
+    except Exception as e:
+        with open('bot.log', 'a') as f:
+            f.write(f"{time.ctime()}: Error in is_already_running: {e}\n")
+        return False
+
+async def login_with_retry(client, token, max_retries=5, delay=5):
+    for attempt in range(max_retries):
+        try:
+            await client.login(token)
+            return
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(delay)
+                delay *= 2
+                continue
+            raise e
+        except Exception as e:
+            with open('bot.log', 'a') as f:
+                f.write(f"{time.ctime()}: Login attempt {attempt + 1} failed: {e}\n")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+            else:
                 raise e
-            except Exception as e:
-                with open('bot.log', 'a') as f:
-                    f.write(f"{time.ctime()}: Login attempt {attempt + 1} failed: {e}\n")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-                else:
-                    raise e
-        raise Exception("Failed to login after maximum retries")
+    raise Exception("Failed to login after maximum retries")
 
 if __name__ == "__main__":
     load_dotenv()
