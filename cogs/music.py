@@ -78,15 +78,15 @@ class Music(commands.Cog):
             color=0x00ff00
         )
         
-        embed.add_field(name="Artist", value=track.author or "Unknown", inline=True)
+        embed.add_field(name="👤 Artist", value=track.author or "Unknown", inline=True)
         
         # Convert length from milliseconds to mm:ss
         duration_ms = track.length or 0
         duration_seconds = duration_ms // 1000
         minutes = duration_seconds // 60
         seconds = duration_seconds % 60
-        embed.add_field(name="Duration", value=f"{minutes}:{seconds:02d}", inline=True)
-        embed.add_field(name="Volume", value=f"{player.volume}%", inline=True)
+        embed.add_field(name="⏱️ Duration", value=f"{minutes}:{seconds:02d}", inline=True)
+        embed.add_field(name="🔊 Volume", value=f"{player.volume}%", inline=True)
         
         # Add thumbnail if available
         if hasattr(track, 'artwork') and track.artwork:
@@ -106,26 +106,20 @@ class Music(commands.Cog):
             
             if next_track:
                 await player.play(next_track)
-                # Update now playing message if it exists
-                if hasattr(player, 'now_playing_message') and player.now_playing_message:
+                # Send new now playing message instead of editing old one
+                if hasattr(player, 'now_playing_channel') and player.now_playing_channel:
                     try:
                         embed = await self.create_now_playing_embed(next_track, player)
                         view = MusicControlView(self, player)
-                        await player.now_playing_message.edit(embed=embed, view=view)
-                    except discord.NotFound:
-                        logger.debug("Now playing message not found (possibly deleted)")
-                    except discord.HTTPException as e:
-                        if e.code == 50027:  # Invalid Webhook Token
-                            logger.debug("Webhook token expired, clearing message reference")
-                            delattr(player, 'now_playing_message')
-                        else:
-                            logger.error(f"HTTP error updating message: {e}")
+                        message = await player.now_playing_channel.send(embed=embed, view=view)
+                        # Store the new message reference
+                        player.now_playing_message = message
                     except Exception as e:
-                        logger.error(f"Error updating message: {e}")
+                        logger.error(f"Error sending now playing message: {e}")
         except Exception as e:
             logger.error(f"Error playing next track: {e}")
             
-    @app_commands.command(name="play", description="Play a song from a URL")
+    @app_commands.command(name="play", description="Play music from YouTube (supports playlists)")
     @app_commands.describe(query="Song name, YouTube URL, or playlist URL")
     async def play(self, interaction: discord.Interaction, query: str):
         """Play music from YouTube (supports playlists)"""
@@ -163,11 +157,11 @@ class Music(commands.Cog):
                 # Add to queue
                 queue.add_track(track)
                 embed = discord.Embed(
-                    title="Added to Queue",
+                    title="➕ Added to Queue",
                     description=f"**[{track.title}]({track.uri})**",
                     color=0x0099ff
                 )
-                embed.add_field(name="Position", value=f"#{queue.size()}", inline=False)
+                embed.add_field(name="📍 Position", value=f"#{queue.size()}", inline=True)
                 await interaction.followup.send(embed=embed)
             else:
                 # Play immediately
@@ -178,6 +172,7 @@ class Music(commands.Cog):
                 view = MusicControlView(self, player)
                 message = await interaction.followup.send(embed=embed, view=view)
                 player.now_playing_message = message
+                player.now_playing_channel = interaction.channel
                 
     async def handle_playlist_load(self, interaction: discord.Interaction, player: wavelink.Player, url: str):
         """Handle playlist loading for both /play and /playlist commands"""
@@ -257,6 +252,7 @@ class Music(commands.Cog):
                 # Send now playing as separate message
                 now_playing_msg = await interaction.followup.send(embed=now_playing_embed, view=view)
                 player.now_playing_message = now_playing_msg
+                player.now_playing_channel = interaction.channel
             else:
                 await interaction.followup.send(embed=embed)
                 
@@ -359,10 +355,10 @@ class Music(commands.Cog):
         queue = self.get_queue(interaction.guild.id)
         
         if queue.is_empty():
-            await interaction.response.send_message("Queue is empty!")
+            await interaction.response.send_message("📭 Queue is empty!")
             return
             
-        embed = discord.Embed(title="Music Queue", color=0x0099ff)
+        embed = discord.Embed(title="📃 Music Queue", color=0x0099ff)
         
         current = queue.get_current()
         if current:
@@ -410,7 +406,7 @@ class Music(commands.Cog):
         queue = self.get_queue(interaction.guild.id)
         queue.clear()
         await player.disconnect()
-        await interaction.response.send_message("Disconnected!")
+        await interaction.response.send_message("👋 Disconnected!")
         
     @app_commands.command(name="search", description="Search for songs without playing")
     @app_commands.describe(query="Song name or YouTube URL to search for")
@@ -549,17 +545,30 @@ class Music(commands.Cog):
         view = QueuePaginationView(current_track, queue_tracks)
         embed = view.create_queue_embed(0)
         
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         
-    @app_commands.command(name="ping", description="Show bot latency")
+    @app_commands.command(name="ping", description="Show bot and Lavalink latency")
     async def ping(self, interaction: discord.Interaction):
         """Show bot and Lavalink latency"""
         try:
             bot_latency = round(self.bot.latency * 1000)
             
             # Get active Lavalink nodes
-            embed = discord.Embed(title="Ping", color=0x0099ff)
+            nodes = wavelink.Pool.get_nodes()
+            embed = discord.Embed(title="🏓 Ping", color=0x0099ff)
             embed.add_field(name="Bot Latency", value=f"{bot_latency}ms", inline=True)
+            
+            if nodes:
+                for i, node in enumerate(nodes, 1):
+                    status = "✅ Connected" if node.status == wavelink.NodeStatus.CONNECTED else "❌ Disconnected"
+                    latency = f"{round(node.heartbeat * 1000)}ms" if node.heartbeat else "N/A"
+                    embed.add_field(
+                        name=f"Lavalink Node {i}",
+                        value=f"{status}\nLatency: {latency}",
+                        inline=True
+                    )
+            else:
+                embed.add_field(name="Lavalink", value="❌ No nodes available", inline=True)
             
             await interaction.response.send_message(embed=embed)
         except Exception as e:

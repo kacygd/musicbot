@@ -84,7 +84,7 @@ class MusicControlView(discord.ui.View):
             logger.error(f"Stop error: {e}")
             await interaction.response.send_message("❌ An error occurred!", ephemeral=True)
         
-    @discord.ui.button(emoji="📋", style=discord.ButtonStyle.secondary, label="Queue")
+    @discord.ui.button(emoji="📋", style=discord.ButtonStyle.secondary, label="View Queue")
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Open paginated queue view"""
         try:
@@ -121,7 +121,7 @@ class MusicControlView(discord.ui.View):
             view = VolumeControlView(self.player, self.music_cog, interaction)
             embed = discord.Embed(
                 title="🔊 Volume Control", 
-                description=f"Current volume: **{self.player.volume}%**\nUse Up/Down buttons to adjust:",
+                description=f"Current volume: **{self.player.volume}%**\nUse +/- buttons to adjust:",
                 color=0x0099ff
             )
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -267,7 +267,7 @@ class QueuePaginationView(discord.ui.View):
     def create_queue_embed(self, page: int) -> discord.Embed:
         """Create embed for specific page"""
         embed = discord.Embed(
-            title="Music Queue", 
+            title="🎵 Music Queue", 
             color=0x0099ff
         )
         
@@ -281,7 +281,7 @@ class QueuePaginationView(discord.ui.View):
             embed.add_field(
                 name="🎵 Now Playing",
                 value=f"**[{self.current_track.title}]({self.current_track.uri})**\n"
-                      f"{self.current_track.author or 'Unknown'} | {minutes}:{seconds:02d}",
+                      f"👤 {self.current_track.author or 'Unknown'} | ⏱️ {minutes}:{seconds:02d}",
                 inline=False
             )
         
@@ -299,10 +299,10 @@ class QueuePaginationView(discord.ui.View):
                 seconds = duration_seconds % 60
                 
                 queue_text += f"**{i + 1}.** [{track.title}]({track.uri})\n"
-                queue_text += f"    {track.author or 'Unknown'} |  {minutes}:{seconds:02d}\n\n"
+                queue_text += f"   👤 {track.author or 'Unknown'} | ⏱️ {minutes}:{seconds:02d}\n\n"
             
             embed.add_field(
-                name=f"Queue ({len(self.queue_tracks)} songs)",
+                name=f"📋 Queue ({len(self.queue_tracks)} songs)",
                 value=queue_text if queue_text else "Queue is empty",
                 inline=False
             )
